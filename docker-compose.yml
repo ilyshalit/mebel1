@@ -1,0 +1,48 @@
+name: furniture-placement
+
+services:
+  # Backend API
+  backend:
+    platform: linux/arm64  # Указываем платформу для Mac M1/M2
+    build:
+      context: .
+      dockerfile: Dockerfile.light  # Используем легкую версию
+    container_name: furniture-placement-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app/backend
+      - ./data:/app/data
+      - ./.env:/app/.env
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    command: uvicorn backend.app:app --host 0.0.0.0 --port 8000 --reload
+
+  # Frontend static server
+  frontend:
+    image: python:3.11-slim
+    container_name: furniture-placement-frontend
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./frontend:/app
+    working_dir: /app
+    command: python3 -m http.server 8080 --bind 0.0.0.0
+    restart: unless-stopped
+
+  # Nginx (опционально - для продакшена)
+  # nginx:
+  #   image: nginx:alpine
+  #   container_name: furniture-placement-nginx
+  #   ports:
+  #     - "80:80"
+  #   volumes:
+  #     - ./nginx.conf:/etc/nginx/nginx.conf
+  #     - ./frontend:/usr/share/nginx/html
+  #   depends_on:
+  #     - backend
+  #   restart: unless-stopped
+
+volumes:
+  data:

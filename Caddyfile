@@ -1,0 +1,22 @@
+{$DOMAIN} {
+	encode gzip
+
+	# API + static files served by backend (results/uploads/catalog)
+	handle /api/* {
+		reverse_proxy backend:8000
+	}
+	handle /results/* {
+		reverse_proxy backend:8000
+	}
+	handle /uploads/* {
+		reverse_proxy backend:8000
+	}
+	handle /catalog/* {
+		reverse_proxy backend:8000
+	}
+
+	# Frontend static
+	root * /srv
+	file_server
+}
+

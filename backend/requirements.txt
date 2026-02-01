@@ -1,0 +1,22 @@
+# Web Framework
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+python-multipart==0.0.6
+
+# AI APIs
+openai==1.12.0
+
+# Image Processing
+Pillow==10.2.0
+requests==2.31.0
+
+# Utils
+python-dotenv==1.0.0
+pydantic==2.5.3
+pydantic-settings==2.1.0
+
+# Background removal
+rembg==2.0.56
+
+# Optional: for better performance
+aiofiles==23.2.1
