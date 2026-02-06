@@ -1,5 +1,5 @@
 # Доступ по IP — только HTTP (без SSL), чтобы работало до настройки DNS
-95.81.123.106 {
+http://95.81.123.106 {
 	encode gzip
 	handle /api/* {
 		reverse_proxy backend:8000
