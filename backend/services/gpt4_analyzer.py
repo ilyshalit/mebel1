@@ -1,11 +1,11 @@
 """
-Сервис для анализа изображений с помощью GPT-4 Vision
+Сервис для анализа изображений с помощью Gemini 2.5 Pro через Kie.ai
 """
 import json
+import requests
 from typing import Dict, Any, Optional, Tuple
-from openai import OpenAI
 from ..utils.load_env import get_env_variable
-from ..utils.image_utils import image_to_data_url
+from .image_uploader import ImageUploader
 
 
 class GPT4Analyzer:
@@ -14,10 +14,10 @@ class GPT4Analyzer:
     """
     
     def __init__(self):
-        """Инициализация клиента OpenAI"""
-        api_key = get_env_variable('OPENAI_API_KEY')
-        self.client = OpenAI(api_key=api_key)
-        self.model = get_env_variable('GPT_MODEL', 'gpt-4o')
+        """Инициализация клиента Kie.ai для Gemini"""
+        self.api_key = get_env_variable('KIE_AI_API_KEY')
+        self.api_url = "https://api.kie.ai/gemini-2.5-pro/v1/chat/completions"
+        self.uploader = ImageUploader()
     
     def analyze_placement(
         self,
@@ -37,60 +37,84 @@ class GPT4Analyzer:
             Словарь с анализом и параметрами размещения
         """
         
-        # Конвертируем изображения в data URLs
-        room_data_url = image_to_data_url(room_image_path)
-        furniture_data_url = image_to_data_url(furniture_image_path)
-        
-        # Формируем промпт в зависимости от режима
-        if manual_position:
-            prompt = self._create_manual_placement_prompt(manual_position)
-        else:
-            prompt = self._create_auto_placement_prompt()
-        
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": prompt["system"]
-                    },
+            # Загружаем изображения на imgbb для получения публичных URL
+            print(f"📤 Загрузка изображений на хостинг...")
+            room_url = self.uploader.upload_image(room_image_path, expiration=600)
+            furniture_url = self.uploader.upload_image(furniture_image_path, expiration=600)
+            
+            if not room_url or not furniture_url:
+                raise ValueError("Не удалось загрузить изображения на хостинг")
+            
+            # Формируем промпт в зависимости от режима
+            if manual_position:
+                prompt_data = self._create_manual_placement_prompt(manual_position)
+            else:
+                prompt_data = self._create_auto_placement_prompt()
+            
+            # Объединяем system и user промпты
+            full_prompt = f"{prompt_data['system']}\n\n{prompt_data['user']}"
+            
+            print(f"🤖 Запуск Gemini 2.5 Pro на Kie.ai...")
+            
+            # Подготавливаем payload в формате Chat Completions API
+            payload = {
+                "messages": [
                     {
                         "role": "user",
                         "content": [
                             {
                                 "type": "text",
-                                "text": prompt["user"]
+                                "text": full_prompt
                             },
                             {
                                 "type": "image_url",
                                 "image_url": {
-                                    "url": room_data_url,
-                                    "detail": "high"
+                                    "url": room_url
                                 }
                             },
                             {
                                 "type": "image_url",
                                 "image_url": {
-                                    "url": furniture_data_url,
-                                    "detail": "high"
+                                    "url": furniture_url
                                 }
                             }
                         ]
                     }
                 ],
-                max_tokens=1500,
-                temperature=0.3
+                "stream": False,
+                "include_thoughts": False,
+                "reasoning_effort": "high"
+            }
+            
+            # Отправляем запрос к Kie.ai Gemini API
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json"
+            }
+            
+            response = requests.post(
+                self.api_url,
+                headers=headers,
+                json=payload,
+                timeout=60
             )
             
-            # Парсим ответ
-            content = response.choices[0].message.content
-            analysis = self._parse_analysis(content)
+            response.raise_for_status()
+            result = response.json()
             
-            return analysis
+            print(f"✅ Ответ от Gemini получен")
+            
+            # Извлекаем текст ответа из формата Chat Completions
+            if 'choices' in result and len(result['choices']) > 0:
+                content = result['choices'][0]['message']['content']
+                analysis = self._parse_analysis(content)
+                return analysis
+            else:
+                raise ValueError("Не получен корректный ответ от Gemini API")
             
         except Exception as e:
-            print(f"❌ Ошибка при анализе с GPT-4V: {e}")
+            print(f"❌ Ошибка при анализе с Gemini: {e}")
             raise
     
     def _create_auto_placement_prompt(self) -> Dict[str, str]:
