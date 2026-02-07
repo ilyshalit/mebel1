@@ -3,6 +3,7 @@ FastAPI приложение для виртуальной примерки ме
 """
 import time
 import uuid
+import json
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
@@ -56,11 +57,34 @@ DATA_DIR = BASE_DIR / "data"
 UPLOADS_DIR = DATA_DIR / "uploads"
 RESULTS_DIR = DATA_DIR / "results"
 CATALOG_DIR = DATA_DIR / "catalog"
+CATALOG_DB_FILE = DATA_DIR / "catalog.json"
 
 # Создаем директории если не существуют
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 CATALOG_DIR.mkdir(parents=True, exist_ok=True)
+
+# Загружаем каталог из файла
+def load_catalog() -> List[Dict[str, Any]]:
+    """Загружает каталог из JSON файла"""
+    if CATALOG_DB_FILE.exists():
+        try:
+            with open(CATALOG_DB_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"⚠️  Ошибка загрузки каталога: {e}")
+    return []
+
+def save_catalog(items: List[Dict[str, Any]]):
+    """Сохраняет каталог в JSON файл"""
+    try:
+        with open(CATALOG_DB_FILE, 'w', encoding='utf-8') as f:
+            json.dump(items, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"⚠️  Ошибка сохранения каталога: {e}")
+
+# Загружаем каталог при старте
+CATALOG_ITEMS: List[Dict[str, Any]] = load_catalog()
 
 # Монтируем статические файлы
 app.mount("/results", StaticFiles(directory=str(RESULTS_DIR)), name="results")
@@ -72,9 +96,6 @@ gpt4_analyzer = GPT4Analyzer()
 background_remover = BackgroundRemover(use_api=False)  # Используем rembg
 inpainting_service = NanoBananaService()
 upsell_service = UpsellService()
-
-# Временное хранилище каталога (в продакшене использовать БД)
-CATALOG_ITEMS: List[Dict[str, Any]] = []
 
 
 @app.get("/")
@@ -118,28 +139,40 @@ async def upload_room(file: UploadFile = File(...)):
 
 
 @app.post("/api/upload/furniture")
-async def upload_furniture(file: UploadFile = File(...)):
+async def upload_furniture(files: List[UploadFile] = File(...)):
     """
-    Загрузка фото мебели и удаление фона
+    Загрузка фото мебели (до 5 предметов) и удаление фона
     """
     try:
-        # Проверка типа файла
-        if not file.content_type.startswith('image/'):
-            raise HTTPException(400, "Файл должен быть изображением")
+        # Ограничение на количество
+        if len(files) > 5:
+            raise HTTPException(400, "Максимум 5 предметов мебели за раз")
         
-        # Сохраняем изображение
-        image_data = await file.read()
-        file_path = save_uploaded_image(image_data, UPLOADS_DIR)
+        results = []
         
-        # Удаляем фон
-        print(f"🔄 Удаление фона с мебели...")
-        furniture_no_bg = background_remover.remove_background(file_path)
+        for file in files:
+            # Проверка типа файла
+            if not file.content_type.startswith('image/'):
+                raise HTTPException(400, f"Файл {file.filename} должен быть изображением")
+            
+            # Сохраняем изображение
+            image_data = await file.read()
+            file_path = save_uploaded_image(image_data, UPLOADS_DIR)
+            
+            # Удаляем фон
+            print(f"🔄 Удаление фона с мебели {file.filename}...")
+            furniture_no_bg = background_remover.remove_background(file_path)
+            
+            results.append({
+                "file_path": furniture_no_bg,
+                "filename": Path(furniture_no_bg).name,
+                "background_removed": True
+            })
         
         return {
             "success": True,
-            "file_path": furniture_no_bg,
-            "filename": Path(furniture_no_bg).name,
-            "background_removed": True
+            "items": results,
+            "count": len(results)
         }
         
     except Exception as e:
@@ -149,7 +182,7 @@ async def upload_furniture(file: UploadFile = File(...)):
 @app.post("/api/generate")
 async def generate_placement(
     room_image_path: str = Form(...),
-    furniture_image_path: str = Form(...),
+    furniture_image_paths: str = Form(...),  # JSON array строка
     mode: str = Form(default="auto"),
     # manual bbox (в пикселях исходного изображения комнаты)
     manual_box_x: Optional[int] = Form(None),
@@ -165,16 +198,24 @@ async def generate_placement(
     wall_alignment: str = Form(default="auto")
 ):
     """
-    Генерация результата с размещенной мебелью
+    Генерация результата с размещенной мебелью (поддержка до 5 предметов)
     
     Modes:
-    - auto: AI сам выбирает лучшее место
+    - auto: AI сам выбирает лучшее место для всех предметов
     - manual: Пользователь указывает позицию (manual_x, manual_y)
     
     Используется Nano Banana Pro (Google DeepMind) через Kie.ai.
     """
     try:
+        import json
         start_time = time.time()
+        
+        # Парсим массив путей к мебели
+        furniture_paths = json.loads(furniture_image_paths)
+        if not isinstance(furniture_paths, list) or len(furniture_paths) == 0:
+            raise HTTPException(400, "furniture_image_paths должен быть непустым массивом")
+        if len(furniture_paths) > 5:
+            raise HTTPException(400, "Максимум 5 предметов мебели")
         
         # Формируем manual position если указан
         manual_position = None
@@ -188,21 +229,21 @@ async def generate_placement(
             elif manual_x is not None and manual_y is not None:
                 manual_position = (manual_x, manual_y)
         
-        # Шаг 1: Анализ с GPT-4V
-        print(f"🔍 Анализ изображений с GPT-4 Vision...")
-        analysis = gpt4_analyzer.analyze_placement(
+        # Шаг 1: Анализ с Gemini Vision для всех предметов мебели
+        print(f"🔍 Анализ комнаты и {len(furniture_paths)} предмет(ов) мебели...")
+        analysis = gpt4_analyzer.analyze_multi_furniture_placement(
             room_image_path,
-            furniture_image_path,
+            furniture_paths,
             manual_position
         )
 
-        # Если пользователь указал прямоугольник — жестко задаём placement по нему
+        # Если пользователь указал прямоугольник — используем его
         if manual_box is not None:
             from PIL import Image
             room_img = Image.open(room_image_path)
             rw, rh = room_img.size
             bx, by, bw, bh = manual_box
-            # clamp на всякий случай
+            # clamp
             bx = max(0, min(bx, rw - 1))
             by = max(0, min(by, rh - 1))
             bw = max(1, min(bw, rw - bx))
@@ -217,12 +258,11 @@ async def generate_placement(
                 "reasoning": "User selected target rectangle (bbox). Place furniture inside this area."
             })
 
-            # auto wall inference if not explicitly set
+            # auto wall inference
             if wall_alignment == "auto":
                 left_margin = bx
                 right_margin = rw - (bx + bw)
                 top_margin = by
-                # heuristic: choose nearest side; map top -> back wall
                 m = min(left_margin, right_margin, top_margin)
                 if m == right_margin:
                     wall_alignment = "right"
@@ -231,18 +271,18 @@ async def generate_placement(
                 else:
                     wall_alignment = "back"
 
-        # Поворот мебели (0 или 90) — сохраняем в analysis для сервиса
+        # Поворот и wall alignment
         if furniture_rotation not in (0, 90):
             raise HTTPException(400, "furniture_rotation должен быть 0 или 90")
         analysis.setdefault("placement", {})
         analysis["placement"]["rotation"] = furniture_rotation
         analysis["placement"]["wall_alignment"] = wall_alignment
         
-        # Шаг 2: Размещение мебели выбранной моделью
-        print(f"🍌 Размещение мебели с помощью {inpainting_service.get_model_name()}...")
-        result_path = inpainting_service.place_furniture(
+        # Шаг 2: Размещение мебели (последовательно или композитом)
+        print(f"🍌 Размещение {len(furniture_paths)} предмет(ов) мебели...")
+        result_path = inpainting_service.place_multi_furniture(
             room_image_path,
-            furniture_image_path,
+            furniture_paths,
             analysis,
             RESULTS_DIR
         )
@@ -262,7 +302,8 @@ async def generate_placement(
             "generation_time": generation_time,
             "model_used": inpainting_service.get_model_name(),
             "preserves_original": inpainting_service.preserves_original(),
-            "analysis": analysis
+            "analysis": analysis,
+            "furniture_count": len(furniture_paths)
         }
         
     except Exception as e:
@@ -359,6 +400,7 @@ async def add_catalog_item(
         }
         
         CATALOG_ITEMS.append(catalog_item)
+        save_catalog(CATALOG_ITEMS)  # Сохраняем в файл
         
         return {
             "success": True,
@@ -390,6 +432,7 @@ async def delete_catalog_item(item_id: str):
     
     # Удаляем из каталога
     CATALOG_ITEMS = [i for i in CATALOG_ITEMS if i['id'] != item_id]
+    save_catalog(CATALOG_ITEMS)  # Сохраняем в файл
     
     return {
         "success": True,

@@ -8,7 +8,7 @@ const API_BASE_URL =
 
 // Глобальные переменные
 let roomImagePath = null;
-let furnitureImagePath = null;
+let furnitureImagePaths = []; // Массив путей к мебели
 let selectedMode = 'auto';
 let manualPosition = null;
 let manualBox = null; // {x, y, w, h} in image pixels
@@ -22,7 +22,7 @@ const roomPreview = document.getElementById('roomPreview');
 
 const furnitureInput = document.getElementById('furnitureInput');
 const furnitureDropZone = document.getElementById('furnitureDropZone');
-const furniturePreview = document.getElementById('furniturePreview');
+const furniturePreviewGrid = document.getElementById('furniturePreviewGrid');
 
 const autoModeBtn = document.getElementById('autoMode');
 const manualModeBtn = document.getElementById('manualMode');
@@ -70,13 +70,20 @@ function initDropZones() {
 
 function setupDropZone(dropZone, input, onFileSelect) {
     // Click to select
-    dropZone.addEventListener('click', () => {
+    dropZone.addEventListener('click', (e) => {
+        // Не открывать input если кликнули на кнопку удаления
+        if (e.target.classList.contains('furniture-preview-remove')) return;
         input.click();
     });
 
     input.addEventListener('change', (e) => {
         if (e.target.files.length > 0) {
-            onFileSelect(e.target.files[0]);
+            // Если это мебель, передаем массив файлов
+            if (input.id === 'furnitureInput' && e.target.files.length > 1) {
+                onFileSelect(Array.from(e.target.files));
+            } else {
+                onFileSelect(e.target.files[0]);
+            }
         }
     });
 
@@ -95,7 +102,12 @@ function setupDropZone(dropZone, input, onFileSelect) {
         dropZone.classList.remove('dragover');
         
         if (e.dataTransfer.files.length > 0) {
-            onFileSelect(e.dataTransfer.files[0]);
+            // Если это мебель, можем принять несколько
+            if (dropZone.id === 'furnitureDropZone' && e.dataTransfer.files.length > 1) {
+                onFileSelect(Array.from(e.dataTransfer.files));
+            } else {
+                onFileSelect(e.dataTransfer.files[0]);
+            }
         }
     });
 }
@@ -128,16 +140,28 @@ async function uploadRoomImage(file) {
     }
 }
 
-// Upload Furniture Image
-async function uploadFurnitureImage(file) {
+// Upload Furniture Images (multiple support)
+async function uploadFurnitureImage(files) {
     try {
-        showPreview(file, furniturePreview);
+        // Принимаем либо один файл, либо массив
+        const fileArray = Array.isArray(files) ? files : [files];
         
+        if (fileArray.length > 5) {
+            alert('Максимум 5 предметов мебели');
+            return;
+        }
+        
+        // Показываем превью перед загрузкой
         const formData = new FormData();
-        formData.append('file', file);
+        for (const file of fileArray) {
+            formData.append('files', file);
+        }
 
-        // Показываем индикатор загрузки
-        furniturePreview.style.opacity = '0.5';
+        // Индикатор загрузки
+        const dropContent = furnitureDropZone.querySelector('.drop-zone-content');
+        if (dropContent) dropContent.style.display = 'none';
+        furniturePreviewGrid.style.display = 'grid';
+        furniturePreviewGrid.innerHTML = '<p style="grid-column: 1/-1; text-align: center;">Загрузка...</p>';
 
         const response = await fetch(`${API_BASE_URL}/api/upload/furniture`, {
             method: 'POST',
@@ -146,18 +170,58 @@ async function uploadFurnitureImage(file) {
 
         const data = await response.json();
         
-        if (data.success) {
-            furnitureImagePath = data.file_path;
-            furniturePreview.style.opacity = '1';
+        if (data.success && data.items) {
+            furnitureImagePaths = data.items.map(item => item.file_path);
+            renderFurniturePreviews(data.items);
             checkReadyToGenerate();
         } else {
             alert('Ошибка загрузки мебели');
-            furniturePreview.style.opacity = '1';
+            furniturePreviewGrid.style.display = 'none';
+            if (dropContent) dropContent.style.display = 'block';
         }
     } catch (error) {
         console.error('Error uploading furniture:', error);
         alert('Ошибка загрузки мебели');
-        furniturePreview.style.opacity = '1';
+        const dropContent = furnitureDropZone.querySelector('.drop-zone-content');
+        furniturePreviewGrid.style.display = 'none';
+        if (dropContent) dropContent.style.display = 'block';
+    }
+}
+
+function renderFurniturePreviews(items) {
+    furniturePreviewGrid.innerHTML = items.map((item, index) => `
+        <div class="furniture-preview-item">
+            <img src="${API_BASE_URL}/uploads/${item.filename}" alt="Furniture ${index + 1}">
+            <button class="furniture-preview-remove" data-index="${index}">×</button>
+        </div>
+    `).join('');
+    
+    // Обработчики удаления
+    furniturePreviewGrid.querySelectorAll('.furniture-preview-remove').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const index = parseInt(btn.dataset.index);
+            removeFurnitureItem(index);
+        });
+    });
+}
+
+function removeFurnitureItem(index) {
+    furnitureImagePaths.splice(index, 1);
+    
+    if (furnitureImagePaths.length === 0) {
+        furniturePreviewGrid.style.display = 'none';
+        const dropContent = furnitureDropZone.querySelector('.drop-zone-content');
+        if (dropContent) dropContent.style.display = 'block';
+        checkReadyToGenerate();
+    } else {
+        // Перерисовываем (в реальном приложении лучше просто удалить элемент)
+        // Здесь для простоты просто скроем элемент
+        const items = furniturePreviewGrid.querySelectorAll('.furniture-preview-item');
+        if (items[index]) {
+            items[index].style.display = 'none';
+        }
+        checkReadyToGenerate();
     }
 }
 
@@ -379,9 +443,11 @@ function drawRoomOnCanvas() {
 
 // Check if ready to generate
 function checkReadyToGenerate() {
-    if (roomImagePath && furnitureImagePath) {
+    if (roomImagePath && furnitureImagePaths.length > 0) {
         step2.style.display = 'block';
         generateBtn.disabled = false;
+    } else {
+        generateBtn.disabled = true;
     }
 }
 
@@ -402,7 +468,7 @@ generateBtn.addEventListener('click', async () => {
         // Prepare form data
         const formData = new FormData();
         formData.append('room_image_path', roomImagePath);
-        formData.append('furniture_image_path', furnitureImagePath);
+        formData.append('furniture_image_paths', JSON.stringify(furnitureImagePaths));
         formData.append('mode', selectedMode);
         
         // rotation: 0 or 90
@@ -420,7 +486,7 @@ generateBtn.addEventListener('click', async () => {
         }
         
         // Update loading text based on model
-        updateLoadingText('Анализ изображений с GPT-4 Vision...');
+        updateLoadingText(`Анализ ${furnitureImagePaths.length} предмет(ов) мебели...`);
         
         // Call API
         const response = await fetch(`${API_BASE_URL}/api/generate`, {
@@ -444,7 +510,7 @@ generateBtn.addEventListener('click', async () => {
                 // Показываем какая модель использовалась
                 if (data.model_used) {
                     console.log(`Использована модель: ${data.model_used}`);
-                    console.log(`Сохраняет оригинал: ${data.preserves_original}`);
+                    console.log(`Размещено предметов: ${data.furniture_count || 1}`);
                 }
                 
                 // Load upsell recommendations
@@ -467,9 +533,20 @@ function updateLoadingText(text) {
 // Upsell recommendations
 async function loadUpsellRecommendations(analysis) {
     try {
+        // Если каталог пустой, не показываем секцию
+        if (!catalogItems || catalogItems.length === 0) {
+            document.getElementById('upsellSection').style.display = 'none';
+            return;
+        }
+        
         const formData = new FormData();
-        formData.append('furniture_analysis', JSON.stringify(analysis.furniture_analysis));
-        formData.append('room_analysis', JSON.stringify(analysis.room_analysis));
+        
+        // Извлекаем данные о мебели
+        const furnitureData = analysis.furniture_analysis || analysis.furniture_items?.[0] || {};
+        const roomData = analysis.room_analysis || {};
+        
+        formData.append('furniture_analysis', JSON.stringify(furnitureData));
+        formData.append('room_analysis', JSON.stringify(roomData));
         
         const response = await fetch(`${API_BASE_URL}/api/upsell`, {
             method: 'POST',
@@ -479,6 +556,7 @@ async function loadUpsellRecommendations(analysis) {
         const data = await response.json();
         
         if (data.success && data.recommendations.length > 0) {
+            document.getElementById('upsellSection').style.display = 'block';
             renderUpsellRecommendations(data.recommendations);
         } else {
             document.getElementById('upsellSection').style.display = 'none';
@@ -499,6 +577,7 @@ function renderUpsellRecommendations(recommendations) {
                 <h4>${item.name}</h4>
                 <p>${item.recommendation_reason || item.description || ''}</p>
                 ${item.recommendation_category ? `<span class="upsell-item-category">${item.recommendation_category}</span>` : ''}
+                ${item.price ? `<div class="upsell-item-price">${item.price} ₽</div>` : ''}
             </div>
         </div>
     `).join('');
@@ -516,16 +595,18 @@ downloadBtn.addEventListener('click', () => {
 tryAgainBtn.addEventListener('click', () => {
     // Reset
     roomImagePath = null;
-    furnitureImagePath = null;
+    furnitureImagePaths = [];
     manualPosition = null;
+    manualBox = null;
     
     roomPreview.style.display = 'none';
     roomPreview.src = '';
     roomDropZone.querySelector('.drop-zone-content').style.display = 'block';
     
-    furniturePreview.style.display = 'none';
-    furniturePreview.src = '';
-    furnitureDropZone.querySelector('.drop-zone-content').style.display = 'block';
+    furniturePreviewGrid.style.display = 'none';
+    furniturePreviewGrid.innerHTML = '';
+    const dropContent = furnitureDropZone.querySelector('.drop-zone-content');
+    if (dropContent) dropContent.style.display = 'block';
     
     step2.style.display = 'none';
     step3.style.display = 'none';

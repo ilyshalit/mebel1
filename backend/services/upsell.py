@@ -1,24 +1,22 @@
 """
-Сервис для генерации рекомендаций доп товаров (upsell)
+Сервис для генерации рекомендаций доп товаров (upsell) через Gemini
 """
 from typing import List, Dict, Any
-from openai import OpenAI
 import json
+import requests
 
 from ..utils.load_env import get_env_variable
 
 
 class UpsellService:
     """
-    Сервис для умных рекомендаций дополнительных товаров
+    Сервис для умных рекомендаций дополнительных товаров через Gemini
     """
     
     def __init__(self):
-        """Инициализация клиента OpenAI"""
-        api_key = get_env_variable('OPENAI_API_KEY')
-        self.client = OpenAI(api_key=api_key)
-        # Используем более дешевую модель для upsell
-        self.model = "gpt-4-turbo-preview"
+        """Инициализация клиента Kie.ai для Gemini"""
+        self.api_key = get_env_variable('KIE_AI_API_KEY')
+        self.api_url = "https://api.kie.ai/gemini-2.5-pro/v1/chat/completions"
     
     def generate_recommendations(
         self,
@@ -28,7 +26,7 @@ class UpsellService:
         max_recommendations: int = 4
     ) -> List[Dict[str, Any]]:
         """
-        Генерирует рекомендации дополнительных товаров
+        Генерирует рекомендации дополнительных товаров через Gemini
         
         Args:
             placed_furniture: Информация о размещенной мебели
@@ -48,33 +46,47 @@ class UpsellService:
                 max_recommendations
             )
             
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": """Ты эксперт по продажам мебели и интерьерному дизайну.
-Твоя задача - рекомендовать дополнительные товары, которые:
-1. Стилистически подходят к уже выбранной мебели
-2. Функционально дополняют интерьер
-3. Создают гармоничную композицию
-
-Будь конкретным и убедительным, но не навязчивым."""
-                    },
+            # Запрос к Gemini через Kie.ai
+            payload = {
+                "messages": [
                     {
                         "role": "user",
-                        "content": prompt
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": prompt
+                            }
+                        ]
                     }
                 ],
-                temperature=0.7,
-                max_tokens=1000
+                "stream": False,
+                "include_thoughts": False,
+                "reasoning_effort": "high"
+            }
+            
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json"
+            }
+            
+            response = requests.post(
+                self.api_url,
+                headers=headers,
+                json=payload,
+                timeout=60
             )
             
-            # Парсим ответ
-            content = response.choices[0].message.content
-            recommendations = self._parse_recommendations(content, catalog_items)
+            response.raise_for_status()
+            result = response.json()
             
-            return recommendations[:max_recommendations]
+            # Извлекаем ответ
+            if 'choices' in result and len(result['choices']) > 0:
+                content = result['choices'][0]['message']['content']
+                recommendations = self._parse_recommendations(content, catalog_items)
+                return recommendations[:max_recommendations]
+            else:
+                print(f"⚠️  Нет ответа от Gemini для upsell")
+                return []
             
         except Exception as e:
             print(f"❌ Ошибка генерации рекомендаций: {e}")
@@ -104,7 +116,9 @@ class UpsellService:
             for item in catalog_items
         ])
         
-        prompt = f"""Клиент только что разместил в своей комнате: {furniture_type}
+        prompt = f"""Ты эксперт по продажам мебели и интерьерному дизайну.
+
+Клиент только что разместил в своей комнате: {furniture_type}
 Характеристики выбранной мебели:
 - Стиль: {furniture_style}
 - Цвет: {furniture_color}
@@ -121,14 +135,14 @@ class UpsellService:
 2. Функционально дополняют интерьер
 3. Помогут создать завершенную композицию
 
-Для каждой рекомендации объясни ПОЧЕМУ это подходит (1-2 предложения).
+Для каждой рекомендации объясни ПОЧЕМУ это подходит и КАКУЮ ПОЛЬЗУ принесет (1-2 убедительных предложения).
 
-Формат ответа (JSON):
+Формат ответа СТРОГО в JSON:
 {{
   "recommendations": [
     {{
       "item_name": "название товара из каталога",
-      "reason": "почему этот товар подходит",
+      "reason": "почему этот товар идеально подходит и какую пользу принесет",
       "category": "функциональное дополнение / стилистическое сочетание / акцент"
     }}
   ]

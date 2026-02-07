@@ -3,7 +3,7 @@
 """
 import json
 import requests
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, List
 from ..utils.load_env import get_env_variable
 from .image_uploader import ImageUploader
 
@@ -18,6 +18,123 @@ class GPT4Analyzer:
         self.api_key = get_env_variable('KIE_AI_API_KEY')
         self.api_url = "https://api.kie.ai/gemini-2.5-pro/v1/chat/completions"
         self.uploader = ImageUploader()
+    
+    def analyze_multi_furniture_placement(
+        self,
+        room_image_path: str,
+        furniture_image_paths: List[str],
+        manual_position: Optional[Tuple[int, int]] = None
+    ) -> Dict[str, Any]:
+        """
+        Анализирует где и как разместить несколько предметов мебели в комнате
+        
+        Args:
+            room_image_path: Путь к изображению комнаты
+            furniture_image_paths: Массив путей к изображениям мебели (до 5)
+            manual_position: Опциональная ручная позиция (x, y) в пикселях
+            
+        Returns:
+            Словарь с анализом и параметрами размещения всех предметов
+        """
+        
+        try:
+            # Загружаем изображения на imgbb
+            print(f"📤 Загрузка изображений на хостинг...")
+            room_url = self.uploader.upload_image(room_image_path, expiration=600)
+            
+            furniture_urls = []
+            for fpath in furniture_image_paths:
+                furl = self.uploader.upload_image(fpath, expiration=600)
+                if not furl:
+                    raise ValueError(f"Не удалось загрузить изображение мебели: {fpath}")
+                furniture_urls.append(furl)
+            
+            if not room_url:
+                raise ValueError("Не удалось загрузить изображение комнаты")
+            
+            # Формируем промпт
+            if manual_position:
+                prompt_data = self._create_multi_manual_placement_prompt(manual_position, len(furniture_urls))
+            else:
+                prompt_data = self._create_multi_auto_placement_prompt(len(furniture_urls))
+            
+            # Объединяем system и user промпты
+            full_prompt = f"{prompt_data['system']}\n\n{prompt_data['user']}"
+            
+            print(f"🤖 Запуск Gemini 2.5 Pro для анализа {len(furniture_urls)} предметов...")
+            
+            # Формируем content с комнатой + всеми предметами мебели
+            content = [
+                {
+                    "type": "text",
+                    "text": full_prompt
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": room_url
+                    }
+                }
+            ]
+            
+            # Добавляем все изображения мебели
+            for furl in furniture_urls:
+                content.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": furl
+                    }
+                })
+            
+            # Подготавливаем payload
+            payload = {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": content
+                    }
+                ],
+                "stream": False,
+                "include_thoughts": False,
+                "reasoning_effort": "high"
+            }
+            
+            # Отправляем запрос к Kie.ai Gemini API
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json"
+            }
+            
+            response = requests.post(
+                self.api_url,
+                headers=headers,
+                json=payload,
+                timeout=90  # Больше времени для множественных предметов
+            )
+            
+            response.raise_for_status()
+            result = response.json()
+            
+            print(f"✅ Ответ от Gemini получен")
+            print(f"📋 Полный ответ: {json.dumps(result, ensure_ascii=False)[:500]}")
+            
+            # Извлекаем текст ответа
+            if 'choices' in result and len(result['choices']) > 0:
+                message = result['choices'][0].get('message', {})
+                content_text = message.get('content', '')
+                if not content_text:
+                    print(f"⚠️  Пустой content в message: {message}")
+                    raise ValueError("Gemini вернул пустой content")
+                print(f"📝 Content от Gemini: {content_text[:200]}...")
+                analysis = self._parse_analysis(content_text)
+                return analysis
+            else:
+                print(f"⚠️  Нет choices в ответе. Ключи: {list(result.keys())}")
+                raise ValueError("Не получен корректный ответ от Gemini API")
+            
+        except Exception as e:
+            print(f"❌ Ошибка при анализе с Gemini: {e}")
+            raise
     
     def analyze_placement(
         self,
@@ -206,6 +323,85 @@ class GPT4Analyzer:
 2. Второе - мебель
 
 Верни JSON как в предыдущем примере, но используй указанную позицию."""
+        }
+    
+    def _create_multi_auto_placement_prompt(self, furniture_count: int) -> Dict[str, str]:
+        """Создает промпт для автоматического размещения нескольких предметов"""
+        return {
+            "system": f"""Ты эксперт по интерьерному дизайну и 3D-композиции.
+Твоя задача - проанализировать фото комнаты и {furniture_count} предметов мебели, определить ЛУЧШЕЕ размещение для КАЖДОГО предмета так, чтобы они гармонично сочетались.
+
+КРИТИЧЕСКИ ВАЖНО:
+- Все предметы должны остаться ПОЛНОСТЬЮ неизменными!
+- Опис
+
+ывай каждый предмет МАКСИМАЛЬНО точно и детально
+- Укажи ТОЧНЫЙ цвет, ТОЧНУЮ форму, ТОЧНЫЕ детали каждого
+- Размещай предметы так, чтобы они не перекрывали друг друга
+- Учитывай перспективу, освещение, пропорции
+
+Верни ответ СТРОГО в JSON формате.""",
+            
+            "user": f"""Проанализируй эти изображения:
+1. Первое изображение - комната
+2. Следующие {furniture_count} изображений - предметы мебели
+
+Определи для КАЖДОГО предмета:
+1. Характеристики (тип, размер, цвет, стиль)
+2. ЛУЧШЕЕ место для размещения
+3. Как предметы сочетаются между собой
+
+Верни JSON:
+{{
+  "room_analysis": {{
+    "size_estimate": "примерный размер в метрах",
+    "lighting": "описание освещения",
+    "style": "стиль интерьера",
+    "perspective": "описание перспективы камеры",
+    "free_spaces": ["список свободных мест"]
+  }},
+  "furniture_items": [
+    {{
+      "index": 0,
+      "type": "тип мебели",
+      "estimated_size": "размер",
+      "style": "стиль",
+      "color": "ТОЧНЫЙ цвет",
+      "features": ["особенности"],
+      "placement": {{
+        "x_percent": 50,
+        "y_percent": 60,
+        "width_percent": 35,
+        "height_percent": 25,
+        "scale": 0.85,
+        "rotation": 15,
+        "reasoning": "почему это место"
+      }}
+    }}
+  ],
+  "overall_composition": "как предметы сочетаются между собой"
+}}
+
+Координаты в процентах от размера изображения."""
+        }
+    
+    def _create_multi_manual_placement_prompt(self, position: Tuple[int, int], furniture_count: int) -> Dict[str, str]:
+        """Создает промпт для ручного размещения нескольких предметов"""
+        x, y = position
+        return {
+            "system": f"""Ты эксперт по интерьерному дизайну.
+Пользователь указал место где хочет разместить {furniture_count} предметов мебели.
+Определи размеры и параметры для каждого предмета.""",
+            
+            "user": f"""Пользователь выбрал позицию ({x}, {y}) для размещения {furniture_count} предметов.
+
+Проанализируй все предметы и определи их оптимальное размещение в этой области.
+
+Изображения:
+1. Первое - комната
+2. Следующие {furniture_count} - предметы мебели
+
+Верни JSON в том же формате что и для автоматического размещения."""
         }
     
     def _parse_analysis(self, content: str) -> Dict[str, Any]:

@@ -6,7 +6,7 @@ import time
 import requests
 import json
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, List
 from PIL import Image
 import uuid
 import os
@@ -34,6 +34,80 @@ class NanoBananaService(BaseInpaintingService):
         
         # Image uploader для создания публичных URL
         self.uploader = ImageUploader()
+    
+    def place_multi_furniture(
+        self,
+        room_image_path: str,
+        furniture_image_paths: List[str],
+        placement_params: Dict[str, Any],
+        output_dir: Path
+    ) -> str:
+        """
+        Размещает несколько предметов мебели в комнате последовательно
+        
+        Args:
+            room_image_path: Путь к изображению комнаты
+            furniture_image_paths: Массив путей к изображениям мебели (без фона)
+            placement_params: Параметры размещения от Gemini
+            output_dir: Директория для сохранения результата
+            
+        Returns:
+            Путь к результирующему изображению
+        """
+        try:
+            current_room = room_image_path
+            furniture_items = placement_params.get("furniture_items", [])
+            
+            # Если в анализе нет furniture_items (старый формат), используем один предмет
+            if not furniture_items and len(furniture_image_paths) == 1:
+                return self.place_furniture(
+                    room_image_path,
+                    furniture_image_paths[0],
+                    placement_params,
+                    output_dir
+                )
+            
+            # Последовательно размещаем каждый предмет
+            for idx, furniture_path in enumerate(furniture_image_paths):
+                print(f"🪑 Размещение предмета {idx + 1}/{len(furniture_image_paths)}...")
+                
+                # Найти параметры для этого предмета
+                item_params = next((item for item in furniture_items if item.get('index') == idx), None)
+                
+                if not item_params:
+                    # Если нет параметров, используем дефолтные
+                    item_params = {"placement": placement_params.get("placement", {})}
+                    print(f"⚠️  Нет параметров для предмета {idx}, использую дефолтные")
+                
+                # Создаем модифицированный placement_params для одного предмета
+                single_item_params = {
+                    "furniture_analysis": {
+                        "type": item_params.get("type", "furniture"),
+                        "style": item_params.get("style", "modern"),
+                        "color": item_params.get("color", "neutral"),
+                        "estimated_size": item_params.get("estimated_size", "medium")
+                    },
+                    "room_analysis": placement_params.get("room_analysis", {}),
+                    "placement": item_params.get("placement", {})
+                }
+                
+                # Размещаем один предмет
+                result_path = self.place_furniture(
+                    current_room,
+                    furniture_path,
+                    single_item_params,
+                    output_dir
+                )
+                
+                # Результат становится новой комнатой для следующего предмета
+                current_room = result_path
+            
+            print(f"✅ Все {len(furniture_image_paths)} предмет(ов) размещены")
+            return current_room
+            
+        except Exception as e:
+            print(f"❌ Ошибка при размещении множественной мебели: {e}")
+            raise
     
     def place_furniture(
         self,
