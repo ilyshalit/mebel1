@@ -104,13 +104,20 @@ class GPT4Analyzer:
             result = response.json()
             
             print(f"✅ Ответ от Gemini получен")
+            print(f"📋 Полный ответ: {json.dumps(result, ensure_ascii=False)[:500]}")
             
             # Извлекаем текст ответа из формата Chat Completions
             if 'choices' in result and len(result['choices']) > 0:
-                content = result['choices'][0]['message']['content']
+                message = result['choices'][0].get('message', {})
+                content = message.get('content', '')
+                if not content:
+                    print(f"⚠️  Пустой content в message: {message}")
+                    raise ValueError("Gemini вернул пустой content")
+                print(f"📝 Content от Gemini: {content[:200]}...")
                 analysis = self._parse_analysis(content)
                 return analysis
             else:
+                print(f"⚠️  Нет choices в ответе или choices пустой. Ключи ответа: {list(result.keys())}")
                 raise ValueError("Не получен корректный ответ от Gemini API")
             
         except Exception as e:
