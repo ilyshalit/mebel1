@@ -64,6 +64,7 @@ html {
     font-size: 16px;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    overflow-x: hidden;
 }
 
 body {
@@ -79,6 +80,7 @@ body {
     max-width: 1400px;
     margin: 0 auto;
     background: var(--color-white);
+    overflow-x: hidden;
 }
 
 /* Header - Hero Style */
@@ -303,6 +305,11 @@ main {
     display: block;
 }
 
+#catalogTab {
+    max-width: 100%;
+    overflow: hidden;
+}
+
 /* Drop Zone - Premium */
 .upload-option {
     font-size: 0.95rem;
@@ -386,6 +393,8 @@ main {
     overflow-x: auto;
     overflow-y: hidden;
     max-height: 220px;
+    max-width: 100%;
+    min-width: 0;
     padding-bottom: var(--spacing-sm);
     -webkit-overflow-scrolling: touch;
 }
@@ -393,10 +402,7 @@ main {
 .catalog-grid-horizontal .catalog-item {
     flex: 0 0 auto;
     width: 140px;
-}
-    padding: var(--spacing-lg);
-    background: var(--color-warm-gray-50);
-    border-radius: var(--radius-md);
+    min-width: 140px;
 }
 
 .catalog-item {
@@ -981,6 +987,8 @@ footer {
     gap: var(--spacing-xl);
     overflow-x: auto;
     overflow-y: hidden;
+    max-width: 100%;
+    min-width: 0;
     padding-bottom: var(--spacing-md);
     -webkit-overflow-scrolling: touch;
 }
@@ -988,6 +996,7 @@ footer {
 .catalog-products-horizontal .product-card {
     flex: 0 0 auto;
     width: 260px;
+    min-width: 260px;
 }
 
 .trial-status {
@@ -1222,6 +1231,25 @@ footer {
         grid-template-columns: 1fr;
     }
 
+    .catalog-grid-horizontal {
+        max-height: 200px;
+    }
+
+    .catalog-grid-horizontal .catalog-item {
+        width: 120px;
+        min-width: 120px;
+    }
+
+    .catalog-products-horizontal .product-card {
+        width: 220px;
+        min-width: 220px;
+    }
+
+    .upload-box {
+        max-width: 100%;
+        overflow: hidden;
+    }
+
     .generate-btn {
         min-height: 52px;
         font-size: 1.1rem;
@@ -1248,6 +1276,16 @@ footer {
 
     .ai-recommendation-text {
         font-size: 0.875rem;
+    }
+
+    .catalog-grid-horizontal .catalog-item {
+        width: 110px;
+        min-width: 110px;
+    }
+
+    .catalog-products-horizontal .product-card {
+        width: 200px;
+        min-width: 200px;
     }
 }
 
