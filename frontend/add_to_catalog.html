@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Загрузка товаров в каталог</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 2rem;
+            min-height: 100vh;
+        }
+        
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            padding: 2rem;
+            border-radius: 1rem;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+        }
+        
+        h1 {
+            color: #333;
+            margin-bottom: 1.5rem;
+            text-align: center;
+        }
+        
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 600;
+            color: #555;
+        }
+        
+        input[type="text"],
+        input[type="number"],
+        textarea {
+            width: 100%;
+            padding: 0.75rem;
+            border: 2px solid #e0e0e0;
+            border-radius: 0.5rem;
+            font-size: 1rem;
+            transition: border 0.3s;
+        }
+        
+        input:focus,
+        textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        textarea {
+            resize: vertical;
+            min-height: 80px;
+        }
+        
+        .file-input {
+            position: relative;
+            display: inline-block;
+            width: 100%;
+        }
+        
+        .file-input input[type="file"] {
+            position: absolute;
+            opacity: 0;
+            width: 100%;
+            height: 100%;
+            cursor: pointer;
+        }
+        
+        .file-label {
+            display: block;
+            padding: 1rem;
+            background: #f5f5f5;
+            border: 2px dashed #ccc;
+            border-radius: 0.5rem;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .file-label:hover {
+            border-color: #667eea;
+            background: #f0f0ff;
+        }
+        
+        .file-label.has-file {
+            border-color: #667eea;
+            background: #f0f0ff;
+        }
+        
+        .preview {
+            margin-top: 1rem;
+            text-align: center;
+        }
+        
+        .preview img {
+            max-width: 200px;
+            max-height: 200px;
+            border-radius: 0.5rem;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        
+        button {
+            width: 100%;
+            padding: 1rem;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 0.5rem;
+            font-size: 1.1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+        }
+        
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .status {
+            margin-top: 1rem;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            text-align: center;
+            display: none;
+        }
+        
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+            display: block;
+        }
+        
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+            display: block;
+        }
+        
+        .loading {
+            display: none;
+            text-align: center;
+            margin-top: 1rem;
+        }
+        
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📦 Загрузка товара в каталог</h1>
+        
+        <form id="uploadForm">
+            <div class="form-group">
+                <label for="name">Название товара *</label>
+                <input type="text" id="name" name="name" placeholder="Например: Кресло мягкое" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="item_type">Тип мебели *</label>
+                <input type="text" id="item_type" name="item_type" placeholder="Например: кресло, диван, стол" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="style">Стиль *</label>
+                <input type="text" id="style" name="style" placeholder="Например: современный, классический" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="description">Описание</label>
+                <textarea id="description" name="description" placeholder="Краткое описание товара"></textarea>
+            </div>
+            
+            <div class="form-group">
+                <label for="price">Цена (₽)</label>
+                <input type="number" id="price" name="price" placeholder="25000">
+            </div>
+            
+            <div class="form-group">
+                <label>Фото товара *</label>
+                <div class="file-input">
+                    <input type="file" id="file" name="file" accept="image/*" required>
+                    <div class="file-label" id="fileLabel">
+                        📷 Нажмите или перетащите фото
+                    </div>
+                </div>
+                <div class="preview" id="preview"></div>
+            </div>
+            
+            <button type="submit">Добавить товар</button>
+        </form>
+        
+        <div class="fix-section" style="margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid #eee;">
+            <p style="margin-bottom: 0.75rem; color: #666;">Уже загруженные товары показываются с шахматным фоном?</p>
+            <button type="button" id="fixBackgroundsBtn" style="padding: 0.75rem 1.5rem; background: #28a745; color: white; border: none; border-radius: 0.5rem; cursor: pointer; font-weight: 600;">Исправить фоны всех товаров</button>
+            <span id="fixStatus" style="margin-left: 1rem; font-size: 0.9rem;"></span>
+        </div>
+        
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <p>Загрузка и обработка изображения...</p>
+        </div>
+        
+        <div class="status" id="status"></div>
+    </div>
+    
+    <script>
+        const form = document.getElementById('uploadForm');
+        const fileInput = document.getElementById('file');
+        const fileLabel = document.getElementById('fileLabel');
+        const preview = document.getElementById('preview');
+        const loading = document.getElementById('loading');
+        const status = document.getElementById('status');
+        
+        // Preview file
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                fileLabel.classList.add('has-file');
+                fileLabel.textContent = `✓ ${file.name}`;
+                
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    preview.innerHTML = `<img src="${e.target.result}" alt="Preview">`;
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+        
+        // Submit form
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const formData = new FormData();
+            formData.append('name', document.getElementById('name').value);
+            formData.append('item_type', document.getElementById('item_type').value);
+            formData.append('style', document.getElementById('style').value);
+            
+            const description = document.getElementById('description').value;
+            if (description) formData.append('description', description);
+            
+            const price = document.getElementById('price').value;
+            if (price) formData.append('price', price);
+            
+            formData.append('file', fileInput.files[0]);
+            
+            // Show loading
+            loading.style.display = 'block';
+            status.style.display = 'none';
+            form.querySelector('button').disabled = true;
+            
+            try {
+                const response = await fetch('http://localhost:8000/api/catalog', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    status.className = 'status success';
+                    status.textContent = `✅ Товар "${data.item.name}" успешно добавлен в каталог!`;
+                    form.reset();
+                    preview.innerHTML = '';
+                    fileLabel.classList.remove('has-file');
+                    fileLabel.textContent = '📷 Нажмите или перетащите фото';
+                } else {
+                    throw new Error(data.error || 'Ошибка добавления товара');
+                }
+            } catch (error) {
+                status.className = 'status error';
+                status.textContent = `❌ Ошибка: ${error.message}`;
+            } finally {
+                loading.style.display = 'none';
+                form.querySelector('button').disabled = false;
+                status.style.display = 'block';
+            }
+        });
+        
+        // Исправить фоны всех товаров в каталоге
+        document.getElementById('fixBackgroundsBtn').addEventListener('click', async () => {
+            const btn = document.getElementById('fixBackgroundsBtn');
+            const status = document.getElementById('fixStatus');
+            btn.disabled = true;
+            status.textContent = 'Обработка...';
+            try {
+                const response = await fetch('http://localhost:8000/api/catalog/fix-backgrounds', { method: 'POST' });
+                const data = await response.json();
+                if (data.success) {
+                    status.textContent = '✓ ' + data.message;
+                    status.style.color = '#28a745';
+                } else {
+                    status.textContent = 'Ошибка';
+                    status.style.color = '#dc3545';
+                }
+            } catch (e) {
+                status.textContent = 'Ошибка: ' + e.message;
+                status.style.color = '#dc3545';
+            }
+            btn.disabled = false;
+        });
+    </script>
+</body>
+</html>

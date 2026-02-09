@@ -10,7 +10,7 @@ from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 
 # Проверяем откуда запускается приложение
 import sys
@@ -229,13 +229,36 @@ async def generate_placement(
             elif manual_x is not None and manual_y is not None:
                 manual_position = (manual_x, manual_y)
         
-        # Шаг 1: Анализ с Gemini Vision для всех предметов мебели
+        # Шаг 1: Анализ с Gemini Vision (при ошибке — запасной режим без AI)
         print(f"🔍 Анализ комнаты и {len(furniture_paths)} предмет(ов) мебели...")
-        analysis = gpt4_analyzer.analyze_multi_furniture_placement(
-            room_image_path,
-            furniture_paths,
-            manual_position
-        )
+        try:
+            analysis = gpt4_analyzer.analyze_multi_furniture_placement(
+                room_image_path,
+                furniture_paths,
+                manual_position
+            )
+        except Exception as e:
+            print(f"⚠️  Gemini недоступен ({e}), используем стандартное размещение")
+            n = len(furniture_paths)
+            analysis = {
+                "room_analysis": {"style": "modern", "lighting": "natural"},
+                "placement": {"x_percent": 50, "y_percent": 60, "width_percent": 35, "height_percent": 25, "rotation": 0, "wall_alignment": "auto"},
+                "furniture_items": [
+                    {
+                        "index": i,
+                        "type": "furniture",
+                        "placement": {
+                            "x_percent": 25 + (i * 50 / max(1, n - 1)),
+                            "y_percent": 55 + (i % 2) * 8,
+                            "width_percent": 30 / n,
+                            "height_percent": 25 / n,
+                            "rotation": 0,
+                            "wall_alignment": "auto"
+                        }
+                    }
+                    for i in range(n)
+                ]
+            }
 
         # Если пользователь указал прямоугольник — используем его
         if manual_box is not None:
@@ -286,6 +309,10 @@ async def generate_placement(
             analysis,
             RESULTS_DIR
         )
+        
+        # Ограничиваем размер результата (макс. 1200px по длинной стороне)
+        from backend.utils.image_utils import limit_image_size
+        result_path = limit_image_size(result_path, max_long_side=1200)
         
         # Формируем URL для доступа к результату
         result_filename = Path(result_path).name
@@ -366,6 +393,29 @@ async def get_catalog():
     }
 
 
+@app.get("/api/catalog/img/{filename}")
+async def get_catalog_image(filename: str):
+    """
+    Отдать изображение каталога с белым фоном (без прозрачности).
+    Всегда возвращает PNG без альфа-канала — без «шахматной доски».
+    """
+    # Убираем query string (?v=2) если есть
+    safe_name = Path(filename.split("?")[0]).name
+    file_path = CATALOG_DIR / safe_name
+    if not file_path.exists():
+        raise HTTPException(404, "Изображение не найдено")
+    try:
+        from backend.utils.image_utils import ensure_rgb_png
+        png_bytes = ensure_rgb_png(str(file_path))
+        return Response(
+            content=png_bytes,
+            media_type="image/png",
+            headers={"Cache-Control": "public, max-age=3600"}
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Ошибка обработки изображения: {e}")
+
+
 @app.post("/api/catalog")
 async def add_catalog_item(
     name: str = Form(...),
@@ -383,8 +433,12 @@ async def add_catalog_item(
         image_data = await file.read()
         file_path = save_uploaded_image(image_data, CATALOG_DIR)
         
-        # Удаляем фон
+        # Удаляем фон (если установлен rembg)
         file_path_no_bg = background_remover.remove_background(file_path)
+        
+        # ВАЖНО: Добавляем белый фон к PNG с прозрачностью (убираем "шахматную доску")
+        from backend.utils.image_utils import add_white_background_to_png
+        file_path_final = add_white_background_to_png(file_path_no_bg)
         
         # Создаем запись в каталоге
         item_id = str(uuid.uuid4())
@@ -393,8 +447,8 @@ async def add_catalog_item(
             "name": name,
             "type": item_type,
             "style": style,
-            "image_path": file_path_no_bg,
-            "image_url": f"/catalog/{Path(file_path_no_bg).name}",
+            "image_path": file_path_final,
+            "image_url": f"/catalog/{Path(file_path_final).name}",
             "description": description,
             "price": price
         }
@@ -409,6 +463,28 @@ async def add_catalog_item(
         
     except Exception as e:
         raise HTTPException(500, f"Ошибка добавления в каталог: {str(e)}")
+
+
+@app.post("/api/catalog/fix-backgrounds")
+async def fix_catalog_backgrounds():
+    """
+    Добавить белый фон ко всем изображениям в каталоге (убрать шахматную доску).
+    Вызови один раз после обновления или для старых товаров.
+    """
+    from backend.utils.image_utils import add_white_background_to_png
+    
+    fixed = 0
+    for item in CATALOG_ITEMS:
+        path = item.get("image_path")
+        if path and Path(path).exists():
+            add_white_background_to_png(path)
+            fixed += 1
+    
+    return {
+        "success": True,
+        "message": f"Обработано {fixed} изображений",
+        "fixed_count": fixed
+    }
 
 
 @app.delete("/api/catalog/{item_id}")

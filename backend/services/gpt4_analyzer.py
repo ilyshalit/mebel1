@@ -2,10 +2,14 @@
 Сервис для анализа изображений с помощью Gemini 2.5 Pro через Kie.ai
 """
 import json
+import time
 import requests
 from typing import Dict, Any, Optional, Tuple, List
 from ..utils.load_env import get_env_variable
 from .image_uploader import ImageUploader
+
+KIE_RETRY_COUNT = 3
+KIE_RETRY_DELAY = 15
 
 
 class GPT4Analyzer:
@@ -38,19 +42,19 @@ class GPT4Analyzer:
         """
         
         try:
-            # Загружаем изображения на imgbb
-            print(f"📤 Загрузка изображений на хостинг...")
-            room_url = self.uploader.upload_image(room_image_path, expiration=600)
+            # Kie.ai возвращает 422 "Failed to get the file information" при ссылках на ImgBB — не может загрузить по URL.
+            # Поэтому для Gemini всегда передаём изображения в base64 (data URL).
+            print(f"📤 Подготовка изображений для Gemini (base64)...")
+            room_url = self.uploader.image_to_data_url(room_image_path)
+            if not room_url:
+                raise ValueError("Не удалось прочитать изображение комнаты")
             
             furniture_urls = []
             for fpath in furniture_image_paths:
-                furl = self.uploader.upload_image(fpath, expiration=600)
+                furl = self.uploader.image_to_data_url(fpath)
                 if not furl:
-                    raise ValueError(f"Не удалось загрузить изображение мебели: {fpath}")
+                    raise ValueError(f"Не удалось прочитать изображение мебели: {fpath}")
                 furniture_urls.append(furl)
-            
-            if not room_url:
-                raise ValueError("Не удалось загрузить изображение комнаты")
             
             # Формируем промпт
             if manual_position:
@@ -99,27 +103,39 @@ class GPT4Analyzer:
                 "reasoning_effort": "high"
             }
             
-            # Отправляем запрос к Kie.ai Gemini API
+            # Отправляем запрос к Kie.ai (с повтором при maintenance)
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json"
             }
             
-            response = requests.post(
-                self.api_url,
-                headers=headers,
-                json=payload,
-                timeout=90  # Больше времени для множественных предметов
-            )
-            
-            response.raise_for_status()
-            result = response.json()
+            result = None
+            for attempt in range(KIE_RETRY_COUNT):
+                response = requests.post(
+                    self.api_url,
+                    headers=headers,
+                    json=payload,
+                    timeout=90
+                )
+                result = response.json()
+                # 422 = Kie.ai не смог получить файл (при ссылках). Мы шлём base64 — 422 не должно быть.
+                if response.status_code == 422 or (result.get("code") == 422 and "file" in (result.get("msg") or "").lower()):
+                    raise ValueError(f"Gemini отклонил изображения: {result.get('msg', '')}")
+                response.raise_for_status()
+                
+                if result.get("code") == 500 and "maintained" in (result.get("msg") or "").lower():
+                    if attempt < KIE_RETRY_COUNT - 1:
+                        print(f"⏳ Kie.ai на обслуживании, повтор через {KIE_RETRY_DELAY} сек... ({attempt + 1}/{KIE_RETRY_COUNT})")
+                        time.sleep(KIE_RETRY_DELAY)
+                        continue
+                    raise ValueError("Kie.ai временно недоступен (maintenance). Попробуйте позже.")
+                
+                break
             
             print(f"✅ Ответ от Gemini получен")
-            print(f"📋 Полный ответ: {json.dumps(result, ensure_ascii=False)[:500]}")
             
             # Извлекаем текст ответа
-            if 'choices' in result and len(result['choices']) > 0:
+            if result and 'choices' in result and len(result['choices']) > 0:
                 message = result['choices'][0].get('message', {})
                 content_text = message.get('content', '')
                 if not content_text:
@@ -129,7 +145,7 @@ class GPT4Analyzer:
                 analysis = self._parse_analysis(content_text)
                 return analysis
             else:
-                print(f"⚠️  Нет choices в ответе. Ключи: {list(result.keys())}")
+                print(f"⚠️  Нет choices в ответе. Ключи: {list(result.keys()) if result else []}")
                 raise ValueError("Не получен корректный ответ от Gemini API")
             
         except Exception as e:
@@ -155,13 +171,12 @@ class GPT4Analyzer:
         """
         
         try:
-            # Загружаем изображения на imgbb для получения публичных URL
-            print(f"📤 Загрузка изображений на хостинг...")
-            room_url = self.uploader.upload_image(room_image_path, expiration=600)
-            furniture_url = self.uploader.upload_image(furniture_image_path, expiration=600)
-            
+            # Для Gemini передаём base64 (Kie.ai даёт 422 на внешние URL ImgBB)
+            print(f"📤 Подготовка изображений для Gemini (base64)...")
+            room_url = self.uploader.image_to_data_url(room_image_path)
+            furniture_url = self.uploader.image_to_data_url(furniture_image_path)
             if not room_url or not furniture_url:
-                raise ValueError("Не удалось загрузить изображения на хостинг")
+                raise ValueError("Не удалось прочитать изображения")
             
             # Формируем промпт в зависимости от режима
             if manual_position:
@@ -204,27 +219,38 @@ class GPT4Analyzer:
                 "reasoning_effort": "high"
             }
             
-            # Отправляем запрос к Kie.ai Gemini API
+            # Отправляем запрос к Kie.ai (с повтором при maintenance)
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json"
             }
             
-            response = requests.post(
-                self.api_url,
-                headers=headers,
-                json=payload,
-                timeout=60
-            )
-            
-            response.raise_for_status()
-            result = response.json()
+            result = None
+            for attempt in range(KIE_RETRY_COUNT):
+                response = requests.post(
+                    self.api_url,
+                    headers=headers,
+                    json=payload,
+                    timeout=60
+                )
+                result = response.json()
+                if response.status_code == 422 or (result.get("code") == 422 and "file" in (result.get("msg") or "").lower()):
+                    raise ValueError(f"Gemini отклонил изображения: {result.get('msg', '')}")
+                response.raise_for_status()
+                
+                if result.get("code") == 500 and "maintained" in (result.get("msg") or "").lower():
+                    if attempt < KIE_RETRY_COUNT - 1:
+                        print(f"⏳ Kie.ai на обслуживании, повтор через {KIE_RETRY_DELAY} сек... ({attempt + 1}/{KIE_RETRY_COUNT})")
+                        time.sleep(KIE_RETRY_DELAY)
+                        continue
+                    raise ValueError("Kie.ai временно недоступен (maintenance). Попробуйте позже.")
+                
+                break
             
             print(f"✅ Ответ от Gemini получен")
-            print(f"📋 Полный ответ: {json.dumps(result, ensure_ascii=False)[:500]}")
             
             # Извлекаем текст ответа из формата Chat Completions
-            if 'choices' in result and len(result['choices']) > 0:
+            if result and 'choices' in result and len(result['choices']) > 0:
                 message = result['choices'][0].get('message', {})
                 content = message.get('content', '')
                 if not content:
@@ -234,7 +260,7 @@ class GPT4Analyzer:
                 analysis = self._parse_analysis(content)
                 return analysis
             else:
-                print(f"⚠️  Нет choices в ответе или choices пустой. Ключи ответа: {list(result.keys())}")
+                print(f"⚠️  Нет choices в ответе. Ключи: {list(result.keys()) if result else []}")
                 raise ValueError("Не получен корректный ответ от Gemini API")
             
         except Exception as e:

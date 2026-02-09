@@ -12,7 +12,7 @@ import uuid
 import os
 
 from ..utils.load_env import get_env_variable
-from ..utils.image_utils import download_image
+from ..utils.image_utils import download_image, create_furniture_collage
 from .image_uploader import ImageUploader
 from .base_inpainting import BaseInpaintingService
 
@@ -43,71 +43,128 @@ class NanoBananaService(BaseInpaintingService):
         output_dir: Path
     ) -> str:
         """
-        Размещает несколько предметов мебели в комнате последовательно
-        
-        Args:
-            room_image_path: Путь к изображению комнаты
-            furniture_image_paths: Массив путей к изображениям мебели (без фона)
-            placement_params: Параметры размещения от Gemini
-            output_dir: Директория для сохранения результата
-            
-        Returns:
-            Путь к результирующему изображению
+        Размещает несколько предметов мебели в комнате.
+        Один предмет — один вызов API. Несколько предметов — коллаж в одном изображении, один вызов API (дешевле и быстрее).
         """
         try:
-            current_room = room_image_path
+            n = len(furniture_image_paths)
             furniture_items = placement_params.get("furniture_items", [])
             
-            # Если в анализе нет furniture_items (старый формат), используем один предмет
-            if not furniture_items and len(furniture_image_paths) == 1:
+            if n == 1:
+                one_params = {
+                    "room_analysis": placement_params.get("room_analysis", {}),
+                    "furniture_analysis": placement_params.get("furniture_analysis", {}),
+                    "placement": placement_params.get("placement", {})
+                }
+                if furniture_items:
+                    first = furniture_items[0]
+                    one_params["furniture_analysis"] = {
+                        "type": first.get("type", "furniture"),
+                        "style": first.get("style", "modern"),
+                        "color": first.get("color", "neutral"),
+                        "estimated_size": first.get("estimated_size", "medium")
+                    }
+                    one_params["placement"] = (first.get("placement") or one_params["placement"])
                 return self.place_furniture(
                     room_image_path,
                     furniture_image_paths[0],
-                    placement_params,
+                    one_params,
                     output_dir
                 )
             
-            # Последовательно размещаем каждый предмет
-            for idx, furniture_path in enumerate(furniture_image_paths):
-                print(f"🪑 Размещение предмета {idx + 1}/{len(furniture_image_paths)}...")
-                
-                # Найти параметры для этого предмета
-                item_params = next((item for item in furniture_items if item.get('index') == idx), None)
-                
-                if not item_params:
-                    # Если нет параметров, используем дефолтные
-                    item_params = {"placement": placement_params.get("placement", {})}
-                    print(f"⚠️  Нет параметров для предмета {idx}, использую дефолтные")
-                
-                # Создаем модифицированный placement_params для одного предмета
-                single_item_params = {
-                    "furniture_analysis": {
-                        "type": item_params.get("type", "furniture"),
-                        "style": item_params.get("style", "modern"),
-                        "color": item_params.get("color", "neutral"),
-                        "estimated_size": item_params.get("estimated_size", "medium")
-                    },
-                    "room_analysis": placement_params.get("room_analysis", {}),
-                    "placement": item_params.get("placement", {})
-                }
-                
-                # Размещаем один предмет
-                result_path = self.place_furniture(
-                    current_room,
-                    furniture_path,
-                    single_item_params,
-                    output_dir
-                )
-                
-                # Результат становится новой комнатой для следующего предмета
-                current_room = result_path
+            # Несколько предметов: один коллаж → один вызов Nano Banana
+            print(f"🖼️  Собираем {n} предмет(ов) в одно изображение для одной генерации...")
+            collage_path = str(output_dir / f"collage_{uuid.uuid4().hex}.png")
+            create_furniture_collage(furniture_image_paths, collage_path, max_height=512, padding=40)
             
-            print(f"✅ Все {len(furniture_image_paths)} предмет(ов) размещены")
-            return current_room
+            print(f"🍌 Один вызов Nano Banana Pro: комната + все предметы...")
+            return self._place_furniture_single_call(
+                room_image_path,
+                collage_path,
+                furniture_image_paths,
+                placement_params,
+                output_dir
+            )
             
         except Exception as e:
             print(f"❌ Ошибка при размещении множественной мебели: {e}")
             raise
+    
+    def _place_furniture_single_call(
+        self,
+        room_image_path: str,
+        collage_path: str,
+        furniture_image_paths: List[str],
+        placement_params: Dict[str, Any],
+        output_dir: Path
+    ) -> str:
+        """Один запрос к API: комната + коллаж мебели, промпт с позициями для каждого предмета."""
+        rotated_path = None
+        try:
+            print(f"📤 Загрузка изображения комнаты на хостинг...")
+            room_url = self.uploader.upload_image(room_image_path, expiration=600)
+            if not room_url:
+                room_url = self.uploader.image_to_data_url(room_image_path)
+                if room_url:
+                    print(f"✅ Комната в base64 (ImgBB недоступен)")
+            if not room_url:
+                raise ValueError("Не удалось загрузить изображение комнаты")
+            
+            print(f"📤 Загрузка коллажа мебели на хостинг...")
+            collage_url = self.uploader.upload_image(collage_path, expiration=600)
+            if not collage_url:
+                collage_url = self.uploader.image_to_data_url(collage_path)
+                if collage_url:
+                    print(f"✅ Коллаж в base64")
+            if not collage_url:
+                raise ValueError("Не удалось загрузить коллаж мебели")
+            
+            prompt = self._create_multi_placement_prompt(
+                placement_params,
+                len(furniture_image_paths)
+            )
+            
+            room_img = Image.open(room_image_path)
+            aspect_ratio = self._get_aspect_ratio(room_img.size)
+            
+            payload = {
+                "model": self.model_name,
+                "input": {
+                    "prompt": prompt,
+                    "image_input": [room_url, collage_url],
+                    "aspect_ratio": aspect_ratio,
+                    "resolution": "2K",
+                    "output_format": "png"
+                }
+            }
+            
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json"
+            }
+            
+            response = requests.post(self.api_url, headers=headers, json=payload, timeout=30)
+            print(f"📡 HTTP статус: {response.status_code}")
+            response.raise_for_status()
+            result = response.json()
+            
+            if result.get("code") != 200:
+                raise ValueError(f"Nano Banana Pro API: {result.get('message')}")
+            
+            data = result.get("data", {})
+            task_id = data.get("taskId")
+            if not task_id:
+                raise ValueError("Нет taskId в ответе")
+            
+            print(f"📋 Задача в очереди, taskId: {task_id}")
+            return self._query_task_result(task_id, output_dir)
+            
+        finally:
+            try:
+                if collage_path and os.path.exists(collage_path):
+                    os.remove(collage_path)
+            except Exception:
+                pass
     
     def place_furniture(
         self,
@@ -129,10 +186,13 @@ class NanoBananaService(BaseInpaintingService):
             Путь к результирующему изображению
         """
         try:
-            # Загружаем изображение комнаты на imgbb
+            # Загружаем изображение комнаты на хостинг (ImgBB). При недоступности — data URL
             print(f"📤 Загрузка изображения комнаты на хостинг...")
             room_url = self.uploader.upload_image(room_image_path, expiration=600)
-            
+            if not room_url:
+                room_url = self.uploader.image_to_data_url(room_image_path)
+                if room_url:
+                    print(f"✅ Комната передана в base64 (ImgBB недоступен)")
             if not room_url:
                 raise ValueError("Не удалось загрузить изображение комнаты на хостинг")
             
@@ -149,10 +209,13 @@ class NanoBananaService(BaseInpaintingService):
                 img.save(rotated_path)
                 upload_path = rotated_path
 
-            # Загружаем изображение мебели на imgbb
+            # Загружаем изображение мебели на хостинг (ImgBB). При недоступности — data URL
             print(f"📤 Загрузка изображения мебели на хостинг...")
             furniture_url = self.uploader.upload_image(upload_path, expiration=600)
-            
+            if not furniture_url:
+                furniture_url = self.uploader.image_to_data_url(upload_path)
+                if furniture_url:
+                    print(f"✅ Мебель передана в base64 (ImgBB недоступен)")
             if not furniture_url:
                 raise ValueError("Не удалось загрузить изображение мебели на хостинг")
             
@@ -235,14 +298,14 @@ class NanoBananaService(BaseInpaintingService):
             except Exception:
                 pass
     
-    def _query_task_result(self, task_id: str, output_dir: Path, max_attempts: int = 60) -> str:
+    def _query_task_result(self, task_id: str, output_dir: Path, max_attempts: int = 120) -> str:
         """
         Опрашивает результат задачи через Query task API
         
         Args:
             task_id: ID задачи от Kie.ai
             output_dir: Директория для сохранения
-            max_attempts: Максимальное количество попыток
+            max_attempts: Максимальное количество попыток (по умолчанию 120 ≈ 4 мин при интервале 2 сек)
             
         Returns:
             Путь к результату
@@ -300,9 +363,49 @@ class NanoBananaService(BaseInpaintingService):
         
         raise TimeoutError("Превышено время ожидания результата от Nano Banana Pro")
     
+    def _create_multi_placement_prompt(self, placement_params: Dict[str, Any], num_items: int) -> str:
+        """
+        Промпт для одного вызова: второе изображение — коллаж из N предметов (слева направо).
+        Описываем позиции для каждого предмета в комнате.
+        """
+        room = placement_params.get("room_analysis", {})
+        room_style = room.get("style", "modern")
+        room_lighting = room.get("lighting", "natural lighting")
+        furniture_items = placement_params.get("furniture_items", [])
+        base_placement = placement_params.get("placement", {})
+        
+        parts = []
+        for idx in range(num_items):
+            item = next((x for x in furniture_items if x.get("index") == idx), None)
+            if item and item.get("placement"):
+                pl = item["placement"]
+                xp = pl.get("x_percent", 50)
+                yp = pl.get("y_percent", 60)
+                wp = pl.get("width_percent", 30)
+                hp = pl.get("height_percent", 25)
+            else:
+                xp = 25 + (idx * 50 / max(1, num_items - 1))
+                yp = 55 + (idx % 2) * 10
+                wp = 30 / num_items
+                hp = 25 / num_items
+            typ = (item or {}).get("type", "furniture item")
+            color = (item or {}).get("color", "neutral")
+            pos = f"center at {xp:.0f}% from left, {yp:.0f}% from top, area about {wp:.0f}% width and {hp:.0f}% height"
+            parts.append(f"Item {idx + 1} (position {idx + 1} in the row, from left): {color} {typ} — place in the room {pos}.")
+        
+        placement_text = "\n".join(parts)
+        
+        return f"""The first image is the room. The second image is a reference sheet with {num_items} furniture items arranged in a row from LEFT to RIGHT (item 1 = leftmost, item {num_items} = rightmost).
+
+Place each item from the second image into the {room_style} room at these positions:
+{placement_text}
+
+CRITICAL: Preserve the EXACT appearance of every furniture item - same colors, textures, and design. Integrate ALL items into the room in one coherent scene.
+Match the room's {room_lighting}. Add realistic shadows and reflections. Maintain photorealistic quality. Output in high resolution (2K) with sharp details."""
+
     def _create_prompt(self, placement_params: Dict[str, Any]) -> str:
         """
-        Создает промпт для Nano Banana Pro
+        Создает промпт для Nano Banana Pro (один предмет).
         
         Args:
             placement_params: Параметры от GPT-4V

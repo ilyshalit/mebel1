@@ -51,3 +51,7 @@ logs/
 # Temporary files
 tmp/
 temp/
+
+# Cursor / workspace (опционально)
+.cursor/
+*.code-workspace

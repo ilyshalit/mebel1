@@ -46,5 +46,10 @@ def get_env_variable(key: str, default: str = None) -> str:
     return value
 
 
+def get_env_optional(key: str) -> str:
+    """Возвращает переменную окружения или пустую строку."""
+    return os.getenv(key, "") or ""
+
+
 # Загружаем при импорте модуля
 load_environment()

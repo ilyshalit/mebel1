@@ -6,6 +6,14 @@ const API_BASE_URL =
     ? `${window.location.protocol}//${window.location.hostname}:8000`
     : window.location.origin;
 
+// URL картинки каталога с белым фоном (без шахматки) — через API
+// ?v=2 обходит кэш браузера
+function catalogImageUrl(item) {
+  if (!item || !item.image_url) return `${API_BASE_URL}/catalog/placeholder.png`;
+  const filename = item.image_url.replace(/^\/catalog\//, '');
+  return `${API_BASE_URL}/api/catalog/img/${filename}?v=2`;
+}
+
 // Глобальные переменные
 let roomImagePath = null;
 let furnitureImagePaths = []; // Массив путей к мебели
@@ -282,7 +290,7 @@ function renderCatalog() {
     
     catalogGrid.innerHTML = catalogItems.map(item => `
         <div class="catalog-item" data-id="${item.id}" data-path="${item.image_path}">
-            <img src="${API_BASE_URL}${item.image_url}" alt="${item.name}">
+            <img src="${catalogImageUrl(item)}" alt="${item.name}">
             <div class="catalog-item-name">${item.name}</div>
         </div>
     `).join('');
@@ -293,16 +301,109 @@ function renderCatalog() {
             document.querySelectorAll('.catalog-item').forEach(i => i.classList.remove('selected'));
             item.classList.add('selected');
             
-            furnitureImagePath = item.dataset.path;
-            
-            // Show preview
-            furniturePreview.src = `${API_BASE_URL}${item.querySelector('img').src}`;
-            furniturePreview.style.display = 'block';
-            furnitureDropZone.querySelector('.drop-zone-content').style.display = 'none';
+            // Для множественной загрузки добавляем в массив
+            if (!furnitureImagePaths.includes(item.dataset.path)) {
+                furnitureImagePaths.push(item.dataset.path);
+                renderFurniturePreviews([{
+                    file_path: item.dataset.path,
+                    filename: item.querySelector('img').alt
+                }]);
+            }
             
             checkReadyToGenerate();
         });
     });
+    
+    // Render catalog preview on homepage
+    renderCatalogPreview();
+}
+
+function renderCatalogPreview() {
+    const catalogPreview = document.getElementById('catalogPreview');
+    const catalogPreviewGrid = document.getElementById('catalogPreviewGrid');
+    
+    if (catalogItems.length === 0) {
+        catalogPreview.style.display = 'none';
+        return;
+    }
+    
+    catalogPreview.style.display = 'block';
+    
+    // Show first 6 items
+    catalogPreviewGrid.innerHTML = catalogItems.slice(0, 6).map(item => `
+        <div class="product-card" data-id="${item.id}" data-path="${item.image_path}">
+            <img src="${catalogImageUrl(item)}" alt="${item.name}">
+            <div class="product-card-content">
+                <h3>${item.name}</h3>
+                <p>${item.description || ''}</p>
+                <div class="product-card-footer">
+                    ${item.price ? `<span class="product-price">${item.price} ₽</span>` : ''}
+                    <button class="product-try-btn">Примерить</button>
+                </div>
+            </div>
+        </div>
+    `).join('');
+    
+    // Add click handlers
+    catalogPreviewGrid.querySelectorAll('.product-try-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const card = btn.closest('.product-card');
+            selectFurnitureFromCatalog(card.dataset.path);
+        });
+    });
+}
+
+function selectFurnitureFromCatalog(path) {
+    // Добавляем в массив мебели
+    if (!furnitureImagePaths.includes(path)) {
+        furnitureImagePaths.push(path);
+        
+        // Показываем превью (упрощенная версия)
+        const dropContent = furnitureDropZone.querySelector('.drop-zone-content');
+        if (dropContent) dropContent.style.display = 'none';
+        furniturePreviewGrid.style.display = 'grid';
+        
+        // Находим имя товара
+        const item = catalogItems.find(i => i.image_path === path);
+        const previewHtml = `
+            <div class="furniture-preview-item">
+                <img src="${catalogImageUrl(item)}" alt="${item.name}">
+                <button class="furniture-preview-remove" data-path="${path}">×</button>
+            </div>
+        `;
+        
+        furniturePreviewGrid.innerHTML += previewHtml;
+        
+        // Обработчик удаления
+        furniturePreviewGrid.querySelector(`[data-path="${path}"]`).addEventListener('click', (e) => {
+            e.stopPropagation();
+            removeFurnitureByPath(path);
+        });
+        
+        checkReadyToGenerate();
+        
+        // Scroll to step 1
+        step1.scrollIntoView({ behavior: 'smooth' });
+    }
+}
+
+function removeFurnitureByPath(path) {
+    const index = furnitureImagePaths.indexOf(path);
+    if (index > -1) {
+        furnitureImagePaths.splice(index, 1);
+        
+        if (furnitureImagePaths.length === 0) {
+            furniturePreviewGrid.style.display = 'none';
+            const dropContent = furnitureDropZone.querySelector('.drop-zone-content');
+            if (dropContent) dropContent.style.display = 'block';
+        } else {
+            // Просто скрываем элемент
+            const items = furniturePreviewGrid.querySelectorAll('.furniture-preview-item');
+            items[index]?.remove();
+        }
+        checkReadyToGenerate();
+    }
 }
 
 // Mode Selection
@@ -572,15 +673,31 @@ function renderUpsellRecommendations(recommendations) {
     
     upsellGrid.innerHTML = recommendations.map(item => `
         <div class="upsell-item">
-            <img src="${API_BASE_URL}${item.image_url || '/catalog/placeholder.png'}" alt="${item.name}">
+            <img src="${catalogImageUrl(item)}" alt="${item.name}">
             <div class="upsell-item-content">
                 <h4>${item.name}</h4>
-                <p>${item.recommendation_reason || item.description || ''}</p>
+                <p class="ai-recommendation-text">💡 <strong>AI рекомендует:</strong> ${item.recommendation_reason || item.description || ''}</p>
                 ${item.recommendation_category ? `<span class="upsell-item-category">${item.recommendation_category}</span>` : ''}
                 ${item.price ? `<div class="upsell-item-price">${item.price} ₽</div>` : ''}
+                <button class="product-try-btn" data-path="${item.image_path}" style="margin-top: var(--spacing-md); width: 100%;">
+                    Показать как будет выглядеть
+                </button>
             </div>
         </div>
     `).join('');
+    
+    // Add click handlers for "try" buttons
+    upsellGrid.querySelectorAll('.product-try-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const path = btn.dataset.path;
+            // Reset and start new generation with this item
+            tryAgainBtn.click();
+            
+            setTimeout(() => {
+                selectFurnitureFromCatalog(path);
+            }, 500);
+        });
+    });
 }
 
 // Download result
