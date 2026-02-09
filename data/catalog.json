@@ -4,7 +4,7 @@
     "name": "Кресло мягкое ",
     "type": "кресло",
     "style": "современный ",
-    "image_path": "/Users/ilyshalit/Desktop/Примерка мебели/data/catalog/77eb1ea1-7b40-4edc-af69-1b8dc71f3725.png",
+    "image_path": "catalog/77eb1ea1-7b40-4edc-af69-1b8dc71f3725.png",
     "image_url": "/catalog/77eb1ea1-7b40-4edc-af69-1b8dc71f3725.png",
     "description": "белое кресло ",
     "price": 5900.0
@@ -14,7 +14,7 @@
     "name": "Кровать двухспальная с тумбами",
     "type": "кровать",
     "style": "современный ",
-    "image_path": "/Users/ilyshalit/Desktop/Примерка мебели/data/catalog/1146b14e-2f8f-4b17-b778-a0ac1ffb9f67.png",
+    "image_path": "catalog/1146b14e-2f8f-4b17-b778-a0ac1ffb9f67.png",
     "image_url": "/catalog/1146b14e-2f8f-4b17-b778-a0ac1ffb9f67.png",
     "description": "Кровать ",
     "price": 25000.0
@@ -24,7 +24,7 @@
     "name": "кресло",
     "type": "кресло",
     "style": "современный ",
-    "image_path": "/Users/ilyshalit/Desktop/Примерка мебели/data/catalog/1a8b69a8-2792-45e7-834a-b2ddebf9c40f.png",
+    "image_path": "catalog/1a8b69a8-2792-45e7-834a-b2ddebf9c40f.png",
     "image_url": "/catalog/1a8b69a8-2792-45e7-834a-b2ddebf9c40f.png",
     "description": "кресло белое ",
     "price": 1000.0

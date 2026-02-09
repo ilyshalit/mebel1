@@ -86,6 +86,21 @@ def save_catalog(items: List[Dict[str, Any]]):
 # Загружаем каталог при старте
 CATALOG_ITEMS: List[Dict[str, Any]] = load_catalog()
 
+
+def resolve_furniture_path(path: str) -> str:
+    """
+    Преобразует путь к мебели в путь на текущей машине.
+    В catalog.json могут быть абсолютные пути с другого ПК или относительные (catalog/xxx.png).
+    """
+    p = Path(path)
+    if p.is_absolute() and p.exists():
+        return str(p)
+    # Относительный путь (catalog/xxx.png) или только имя файла
+    for candidate in (DATA_DIR / path, CATALOG_DIR / p.name):
+        if candidate.exists():
+            return str(candidate)
+    return str(path)
+
 # Монтируем статические файлы
 app.mount("/results", StaticFiles(directory=str(RESULTS_DIR)), name="results")
 app.mount("/catalog", StaticFiles(directory=str(CATALOG_DIR)), name="catalog")
@@ -210,12 +225,14 @@ async def generate_placement(
         import json
         start_time = time.time()
         
-        # Парсим массив путей к мебели
+        # Парсим массив путей к мебели (могут быть пути с другого ПК из catalog.json)
         furniture_paths = json.loads(furniture_image_paths)
         if not isinstance(furniture_paths, list) or len(furniture_paths) == 0:
             raise HTTPException(400, "furniture_image_paths должен быть непустым массивом")
         if len(furniture_paths) > 5:
             raise HTTPException(400, "Максимум 5 предметов мебели")
+        # Приводим пути к путям на этом сервере (каталог может содержать пути с Mac/другой машины)
+        furniture_paths = [resolve_furniture_path(p) for p in furniture_paths]
         
         # Формируем manual position если указан
         manual_position = None
@@ -440,15 +457,17 @@ async def add_catalog_item(
         from backend.utils.image_utils import add_white_background_to_png
         file_path_final = add_white_background_to_png(file_path_no_bg)
         
-        # Создаем запись в каталоге
+        # Создаем запись в каталоге (относительный путь — чтобы работало на любом сервере)
         item_id = str(uuid.uuid4())
+        filename = Path(file_path_final).name
+        image_path_stored = f"catalog/{filename}"
         catalog_item = {
             "id": item_id,
             "name": name,
             "type": item_type,
             "style": style,
-            "image_path": file_path_final,
-            "image_url": f"/catalog/{Path(file_path_final).name}",
+            "image_path": image_path_stored,
+            "image_url": f"/catalog/{filename}",
             "description": description,
             "price": price
         }
@@ -476,9 +495,11 @@ async def fix_catalog_backgrounds():
     fixed = 0
     for item in CATALOG_ITEMS:
         path = item.get("image_path")
-        if path and Path(path).exists():
-            add_white_background_to_png(path)
-            fixed += 1
+        if path:
+            resolved = resolve_furniture_path(path)
+            if Path(resolved).exists():
+                add_white_background_to_png(resolved)
+                fixed += 1
     
     return {
         "success": True,
@@ -500,9 +521,9 @@ async def delete_catalog_item(item_id: str):
     if not item:
         raise HTTPException(404, "Товар не найден")
     
-    # Удаляем файл
+    # Удаляем файл (путь может быть относительным или с другой машины)
     try:
-        Path(item['image_path']).unlink(missing_ok=True)
+        Path(resolve_furniture_path(item['image_path'])).unlink(missing_ok=True)
     except Exception as e:
         print(f"⚠️  Не удалось удалить файл: {e}")
     
