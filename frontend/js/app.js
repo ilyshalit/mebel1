@@ -101,7 +101,7 @@ function initPlacementMode() {
         if (furnitureDropText) {
             furnitureDropText.textContent = mode === 'place'
                 ? 'Загрузите до 5 предметов мебели'
-                : 'Выберите 1–3 предмета (новую мебель)';
+                : 'Выберите 1–5 предметов (новую мебель)';
         }
         if (step2Title) {
             step2Title.textContent = mode === 'place' ? 'Режим Размещения' : 'Заменить мебель';
@@ -118,10 +118,11 @@ function initPlacementMode() {
             renderReplaceWhatButtons();
         }
         if (mode === 'replace') updateTrialStatus();
-        if (mode === 'replace' && furnitureImagePaths.length > 3) {
-            furnitureImagePaths = furnitureImagePaths.slice(0, 3);
-            renderFurniturePreviews();
+        if (mode === 'replace' && furnitureImagePaths.length > 5) {
+            furnitureImagePaths = furnitureImagePaths.slice(0, 5);
+            renderAllFurniturePreviews();
         }
+        if (mode === 'replace' && roomImagePath) checkReadyToGenerate();
     }
 
     placeBtn.addEventListener('click', () => setPlacementMode('place'));
@@ -226,7 +227,6 @@ async function uploadFurnitureImage(files) {
             return;
         }
         
-        // Показываем превью перед загрузкой
         const formData = new FormData();
         for (const file of fileArray) {
             formData.append('files', file);
@@ -263,41 +263,69 @@ async function uploadFurnitureImage(files) {
     }
 }
 
-function renderFurniturePreviews(items) {
-    furniturePreviewGrid.innerHTML = items.map((item, index) => `
-        <div class="furniture-preview-item">
-            <img src="${API_BASE_URL}/uploads/${item.filename}" alt="Furniture ${index + 1}">
-            <button class="furniture-preview-remove" data-index="${index}">×</button>
-        </div>
-    `).join('');
-    
-    // Обработчики удаления
+// Для каждого path возвращаем { url, name } — из каталога или uploads
+function getPreviewItem(path) {
+    const cat = catalogItems.find(i => i.image_path === path);
+    if (cat) return { url: catalogImageUrl(cat), name: cat.name };
+    const filename = path.replace(/^.*[/\\]/, '');
+    return { url: `${API_BASE_URL}/uploads/${filename}`, name: filename || 'Предмет' };
+}
+
+// Единая отрисовка превью по furnitureImagePaths (каталог и загрузки — правильные подписи и картинки)
+function renderAllFurniturePreviews() {
+    if (!furnitureImagePaths.length) {
+        furniturePreviewGrid.style.display = 'none';
+        furniturePreviewGrid.innerHTML = '';
+        const dropContent = furnitureDropZone.querySelector('.drop-zone-content');
+        if (dropContent) dropContent.style.display = 'block';
+        checkReadyToGenerate();
+        return;
+    }
+    const dropContent = furnitureDropZone.querySelector('.drop-zone-content');
+    if (dropContent) dropContent.style.display = 'none';
+    furniturePreviewGrid.style.display = 'grid';
+    furniturePreviewGrid.innerHTML = furnitureImagePaths.map((path, index) => {
+        const { url, name } = getPreviewItem(path);
+        return `
+            <div class="furniture-preview-item">
+                <img src="${url}" alt="${name}">
+                <button class="furniture-preview-remove" data-index="${index}">×</button>
+            </div>
+        `;
+    }).join('');
     furniturePreviewGrid.querySelectorAll('.furniture-preview-remove').forEach(btn => {
         btn.addEventListener('click', (e) => {
             e.stopPropagation();
-            const index = parseInt(btn.dataset.index);
-            removeFurnitureItem(index);
+            removeFurnitureItem(parseInt(btn.dataset.index));
+        });
+    });
+    checkReadyToGenerate();
+}
+
+function renderFurniturePreviews(items) {
+    // items от загрузки: [{ file_path, filename }]; paths уже в furnitureImagePaths
+    furniturePreviewGrid.innerHTML = items.map((item, index) => {
+        const path = item.file_path;
+        const url = `${API_BASE_URL}/uploads/${item.filename}`;
+        const name = item.filename || ('Предмет ' + (index + 1));
+        return `
+            <div class="furniture-preview-item">
+                <img src="${url}" alt="${name}">
+                <button class="furniture-preview-remove" data-index="${index}">×</button>
+            </div>
+        `;
+    }).join('');
+    furniturePreviewGrid.querySelectorAll('.furniture-preview-remove').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            removeFurnitureItem(parseInt(btn.dataset.index));
         });
     });
 }
 
 function removeFurnitureItem(index) {
     furnitureImagePaths.splice(index, 1);
-    
-    if (furnitureImagePaths.length === 0) {
-        furniturePreviewGrid.style.display = 'none';
-        const dropContent = furnitureDropZone.querySelector('.drop-zone-content');
-        if (dropContent) dropContent.style.display = 'block';
-        checkReadyToGenerate();
-    } else {
-        // Перерисовываем (в реальном приложении лучше просто удалить элемент)
-        // Здесь для простоты просто скроем элемент
-        const items = furniturePreviewGrid.querySelectorAll('.furniture-preview-item');
-        if (items[index]) {
-            items[index].style.display = 'none';
-        }
-        checkReadyToGenerate();
-    }
+    renderAllFurniturePreviews();
 }
 
 function showPreview(file, imgElement) {
@@ -362,25 +390,32 @@ function renderCatalog() {
         </div>
     `).join('');
     
-    // Add click handlers
+    // Клик по товару в каталоге — только выделение (множественный выбор)
     document.querySelectorAll('.catalog-item').forEach(item => {
         item.addEventListener('click', () => {
-            document.querySelectorAll('.catalog-item').forEach(i => i.classList.remove('selected'));
-            item.classList.add('selected');
-            
-            if (placementMode === 'replace') {
-                if (!furnitureImagePaths.includes(item.dataset.path) && furnitureImagePaths.length < 3) {
-                    furnitureImagePaths.push(item.dataset.path);
-                    renderFurniturePreviews([{ file_path: item.dataset.path, filename: item.querySelector('img').alt }]);
-                }
-            } else if (!furnitureImagePaths.includes(item.dataset.path)) {
-                furnitureImagePaths.push(item.dataset.path);
-                renderFurniturePreviews([{ file_path: item.dataset.path, filename: item.querySelector('img').alt }]);
-            }
-            
-            checkReadyToGenerate();
+            item.classList.toggle('selected');
         });
     });
+
+    // Кнопка «Применить» в разделе Каталог — добавляет выбранные товары в мебель
+    const catalogApplyBtn = document.getElementById('catalogApplyBtn');
+    if (catalogApplyBtn) {
+        catalogApplyBtn.addEventListener('click', () => {
+            const selected = Array.from(document.querySelectorAll('.catalog-item.selected'));
+            const paths = selected.map(el => el.dataset.path).filter(p => p);
+            let added = 0;
+            for (const path of paths) {
+                if (furnitureImagePaths.includes(path)) continue;
+                if (furnitureImagePaths.length >= 5) break;
+                furnitureImagePaths.push(path);
+                added++;
+            }
+            if (added) {
+                renderAllFurniturePreviews();
+                document.querySelectorAll('.catalog-item').forEach(i => i.classList.remove('selected'));
+            }
+        });
+    }
     
     // Render catalog preview on homepage
     renderCatalogPreview();
@@ -423,57 +458,18 @@ function renderCatalogPreview() {
 }
 
 function selectFurnitureFromCatalog(path) {
-    if (placementMode === 'replace') {
-        if (furnitureImagePaths.includes(path)) return;
-        if (furnitureImagePaths.length >= 3) return;
-        furnitureImagePaths.push(path);
-    } else if (!furnitureImagePaths.includes(path)) {
-        furnitureImagePaths.push(path);
-    }
-    if (furnitureImagePaths.length) {
-        const dropContent = furnitureDropZone.querySelector('.drop-zone-content');
-        if (dropContent) dropContent.style.display = 'none';
-        furniturePreviewGrid.style.display = 'grid';
-        if (placementMode === 'replace') furniturePreviewGrid.innerHTML = '';
-
-        const item = catalogItems.find(i => i.image_path === path);
-        const previewHtml = `
-            <div class="furniture-preview-item">
-                <img src="${catalogImageUrl(item)}" alt="${item.name}">
-                <button class="furniture-preview-remove" data-path="${path}">×</button>
-            </div>
-        `;
-        
-        furniturePreviewGrid.innerHTML += previewHtml;
-        
-        // Обработчик удаления
-        furniturePreviewGrid.querySelector(`[data-path="${path}"]`).addEventListener('click', (e) => {
-            e.stopPropagation();
-            removeFurnitureByPath(path);
-        });
-        
-        checkReadyToGenerate();
-        
-        // Scroll to step 1
-        step1.scrollIntoView({ behavior: 'smooth' });
-    }
+    if (furnitureImagePaths.includes(path)) return;
+    if (furnitureImagePaths.length >= 5) return;
+    furnitureImagePaths.push(path);
+    renderAllFurniturePreviews();
+    step1.scrollIntoView({ behavior: 'smooth' });
 }
 
 function removeFurnitureByPath(path) {
     const index = furnitureImagePaths.indexOf(path);
     if (index > -1) {
         furnitureImagePaths.splice(index, 1);
-        
-        if (furnitureImagePaths.length === 0) {
-            furniturePreviewGrid.style.display = 'none';
-            const dropContent = furnitureDropZone.querySelector('.drop-zone-content');
-            if (dropContent) dropContent.style.display = 'block';
-        } else {
-            // Просто скрываем элемент
-            const items = furniturePreviewGrid.querySelectorAll('.furniture-preview-item');
-            items[index]?.remove();
-        }
-        checkReadyToGenerate();
+        renderAllFurniturePreviews();
     }
 }
 
@@ -674,7 +670,7 @@ function renderReplaceWhatButtons() {
             if (idx >= 0) {
                 replaceWhatList.splice(idx, 1);
             } else {
-                if (replaceWhatList.length < 3) replaceWhatList.push(value);
+                if (replaceWhatList.length < 5) replaceWhatList.push(value);
             }
             btn.classList.toggle('active', replaceWhatList.includes(value));
         });
@@ -683,6 +679,7 @@ function renderReplaceWhatButtons() {
 
 async function updateTrialStatus() {
     const el = document.getElementById('trialStatus');
+    const limitReachedEl = document.getElementById('trialLimitReached');
     if (!el) return;
     try {
         const r = await fetch(`${API_BASE_URL}/api/trial-status`);
@@ -690,16 +687,35 @@ async function updateTrialStatus() {
         const rem = d.remaining != null ? d.remaining : Math.max(0, (d.limit || 3) - (d.used || 0));
         const limit = d.limit || 3;
         el.textContent = rem > 0 ? `Осталось ${rem} из ${limit} пробных визуализаций` : `Пробных визуализаций использовано: ${limit} из ${limit}`;
+        if (limitReachedEl) limitReachedEl.style.display = rem === 0 ? 'block' : 'none';
+        if (rem === 0) generateBtn.disabled = true;
     } catch (e) {
         el.textContent = 'Пробных визуализаций: 3';
+        if (limitReachedEl) limitReachedEl.style.display = 'none';
     }
 }
 
 // Check if ready to generate
 function checkReadyToGenerate() {
-    if (roomImagePath && furnitureImagePaths.length > 0) {
+    const hasRoom = !!roomImagePath;
+    const hasFurniture = furnitureImagePaths.length > 0;
+    // В режиме «Заменить» показываем step2 сразу после загрузки комнаты — чтобы видеть «Что заменить?»
+    const showStep2 = hasRoom && (hasFurniture || placementMode === 'replace');
+    const generateHint = document.getElementById('generateHint');
+    if (showStep2) {
         step2.style.display = 'block';
-        generateBtn.disabled = false;
+        generateBtn.disabled = !hasFurniture;
+        if (generateHint) {
+            if (hasFurniture) {
+                generateHint.style.display = 'none';
+            } else {
+                generateHint.style.display = 'block';
+                if (placementMode === 'place') {
+                    generateHint.textContent = 'Выберите или загрузите мебель в блоке «Предметы мебели» выше — тогда кнопка станет активной.';
+                }
+                // Для режима «Заменить» текст подсказки уже в HTML (с выделением «Применить»)
+            }
+        }
         if (placementMode === 'replace') {
             const replaceWhatBlock = document.getElementById('replaceWhatSelection');
             if (replaceWhatBlock) replaceWhatBlock.style.display = 'block';
@@ -708,18 +724,31 @@ function checkReadyToGenerate() {
         updateTrialStatus();
     } else {
         generateBtn.disabled = true;
+        if (generateHint) generateHint.style.display = 'none';
     }
 }
 
 // Generate (Nano Banana Pro)
 generateBtn.addEventListener('click', async () => {
-    if (placementMode === 'replace' && (furnitureImagePaths.length < 1 || furnitureImagePaths.length > 3)) {
-        alert('В режиме «Заменить мебель» выберите от 1 до 3 предметов — новую мебель.');
+    if (placementMode === 'replace' && (furnitureImagePaths.length < 1 || furnitureImagePaths.length > 5)) {
+        alert('В режиме «Заменить мебель» выберите от 1 до 5 предметов — новую мебель.');
         return;
     }
     if (selectedMode === 'manual' && !manualBox) {
         alert('Выделите прямоугольником место на комнате где разместить мебель');
         return;
+    }
+    // Проверка лимита до отправки запроса — сразу уведомляем пользователя
+    try {
+        const trialRes = await fetch(`${API_BASE_URL}/api/trial-status`);
+        const trial = await trialRes.json();
+        const remaining = trial.remaining != null ? trial.remaining : Math.max(0, (trial.limit || 3) - (trial.used || 0));
+        if (remaining <= 0) {
+            alert('Пробные визуализации закончились (использовано ' + (trial.used || trial.limit || 3) + ' из ' + (trial.limit || 3) + '). Для продолжения свяжитесь с нами.');
+            return;
+        }
+    } catch (e) {
+        console.warn('Trial status check failed', e);
     }
     
     // Show step 3
@@ -727,13 +756,14 @@ generateBtn.addEventListener('click', async () => {
     step3.scrollIntoView({ behavior: 'smooth' });
     loadingState.style.display = 'block';
     resultState.style.display = 'none';
+    let progressInterval = null;
     
     try {
         // Prepare form data
         const formData = new FormData();
         formData.append('room_image_path', roomImagePath);
         const pathsToSend = placementMode === 'replace' && furnitureImagePaths.length
-            ? furnitureImagePaths.slice(0, 3)
+            ? furnitureImagePaths.slice(0, 5)
             : furnitureImagePaths;
         formData.append('furniture_image_paths', JSON.stringify(pathsToSend));
         formData.append('placement_mode', placementMode);
@@ -754,10 +784,27 @@ generateBtn.addEventListener('click', async () => {
             formData.append('manual_box_h', manualBox.h);
         }
         
-        updateLoadingText(placementMode === 'replace'
-            ? 'Замена мебели в комнате...'
-            : `Анализ ${furnitureImagePaths.length} предмет(ов) мебели...`);
-        setLoadingNoticeVisible(true);
+        const steps = placementMode === 'replace'
+            ? [
+                'Подготовка запроса...',
+                'Анализируем комнату и мебель (ИИ)...',
+                'Определяем, что заменить...',
+                'Генерируем новое изображение (нейросеть)...',
+                'Финальная визуализация...'
+            ]
+            : [
+                'Подготовка запроса...',
+                'Анализируем комнату и мебель (ИИ)...',
+                'Подбираем оптимальное размещение...',
+                'Генерируем изображение (нейросеть)...',
+                'Финальная визуализация...'
+            ];
+        let stepIndex = 0;
+        updateLoadingText(steps[0]);
+        progressInterval = setInterval(() => {
+            stepIndex = Math.min(stepIndex + 1, steps.length - 1);
+            updateLoadingText(steps[stepIndex]);
+        }, 6000);
         
         // Call API
         const response = await fetch(`${API_BASE_URL}/api/generate`, {
@@ -765,13 +812,20 @@ generateBtn.addEventListener('click', async () => {
             body: formData
         });
         
+        clearInterval(progressInterval);
         const data = await response.json();
         
         if (!response.ok) {
-            setLoadingNoticeVisible(false);
             loadingState.style.display = 'none';
-            const msg = data.detail || data.error || data.message || 'Ошибка генерации';
-            alert(typeof msg === 'string' ? msg : (msg.msg || JSON.stringify(msg)));
+            let msg = data.detail || data.error || data.message || 'Ошибка генерации';
+            if (Array.isArray(msg)) msg = msg[0];
+            if (msg && typeof msg === 'object') msg = msg.msg || JSON.stringify(msg);
+            if (response.status === 403) {
+                updateTrialStatus();
+                alert(msg || 'Пробные визуализации закончились. Для продолжения свяжитесь с нами.');
+            } else {
+                alert(typeof msg === 'string' ? msg : String(msg));
+            }
             return;
         }
         
@@ -780,7 +834,6 @@ generateBtn.addEventListener('click', async () => {
             const resultUrl = `${API_BASE_URL}${data.result_image_url}`;
             generationTime.textContent = data.generation_time.toFixed(1);
             const onImageReady = () => {
-                setLoadingNoticeVisible(false);
                 updateLoadingText('Готово!');
                 loadingState.style.display = 'none';
                 resultState.style.display = 'block';
@@ -802,16 +855,11 @@ generateBtn.addEventListener('click', async () => {
         }
     } catch (error) {
         console.error('Generation error:', error);
-        setLoadingNoticeVisible(false);
+        if (progressInterval) clearInterval(progressInterval);
         loadingState.style.display = 'none';
         alert(`Ошибка генерации: ${error.message}`);
     }
 });
-
-function setLoadingNoticeVisible(visible) {
-    const notice = document.querySelector('.loading-wait-notice');
-    if (notice) notice.style.display = visible ? 'block' : 'none';
-}
 
 function updateLoadingText(text) {
     const substep = document.querySelector('.loading-substep');

@@ -60,12 +60,15 @@ async def log_visits_middleware(request, call_next):
     response = await call_next(request)
     path = request.url.path
     if path.startswith("/api/") and not path.startswith("/api/admin/"):
-        try:
-            ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (request.client.host if request.client else "")
-            ua = request.headers.get("user-agent", "")
-            db.log_visit(ip or "?", ua, path, request.method)
-        except Exception:
-            pass
+        if path == "/api/generate" and request.method == "POST":
+            pass  # считаем только успешные генерации — логируем внутри endpoint
+        else:
+            try:
+                ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (request.client.host if request.client else "")
+                ua = request.headers.get("user-agent", "")
+                db.log_visit(ip or "?", ua, path, request.method)
+            except Exception:
+                pass
     return response
 
 # Директории (BASE_DIR уже определен выше)
@@ -205,32 +208,25 @@ async def upload_room(file: UploadFile = File(...)):
 @app.post("/api/upload/furniture")
 async def upload_furniture(files: List[UploadFile] = File(...)):
     """
-    Загрузка фото мебели (до 5 предметов) и удаление фона
+    Загрузка фото мебели (до 5 предметов). Фон не удаляется — используется исходное фото.
     """
     try:
-        # Ограничение на количество
         if len(files) > 5:
             raise HTTPException(400, "Максимум 5 предметов мебели за раз")
         
         results = []
         
         for file in files:
-            # Проверка типа файла
             if not file.content_type.startswith('image/'):
                 raise HTTPException(400, f"Файл {file.filename} должен быть изображением")
             
-            # Сохраняем изображение
             image_data = await file.read()
             file_path = save_uploaded_image(image_data, UPLOADS_DIR)
-            
-            # Удаляем фон
-            print(f"🔄 Удаление фона с мебели {file.filename}...")
-            furniture_no_bg = background_remover.remove_background(file_path)
-            
+            print(f"📷 Мебель загружена (без удаления фона): {file.filename}")
             results.append({
-                "file_path": furniture_no_bg,
-                "filename": Path(furniture_no_bg).name,
-                "background_removed": True
+                "file_path": file_path,
+                "filename": Path(file_path).name,
+                "background_removed": False,
             })
         
         return {
@@ -316,8 +312,8 @@ async def generate_placement(
         
         # Режим «Заменить мебель»: 1–3 предмета, replace_what через запятую
         if (placement_mode or "").strip().lower() == "replace":
-            if len(furniture_paths) < 1 or len(furniture_paths) > 3:
-                raise HTTPException(400, "В режиме «Заменить мебель» выберите от 1 до 3 предметов (новую мебель)")
+            if len(furniture_paths) < 1 or len(furniture_paths) > 5:
+                raise HTTPException(400, "В режиме «Заменить мебель» выберите от 1 до 5 предметов (новую мебель)")
             replace_hint = (replace_what or "").strip() or None
             print(f"🔄 Режим замены: подставляем новую мебель вместо старой" + (f" ({replace_hint})" if replace_hint else "") + "...")
             if len(furniture_paths) == 1:
@@ -345,6 +341,10 @@ async def generate_placement(
                 "furniture_analysis": {"type": "мебель", "style": "современный", "color": "нейтральный"},
                 "furniture_items": [{"index": 0, "type": "мебель", "placement": {}}]
             }
+            try:
+                db.log_visit(client_ip, request.headers.get("user-agent", ""), "/api/generate", "POST")
+            except Exception:
+                pass
             return {
                 "success": True,
                 "result_image_path": result_path,
@@ -463,6 +463,10 @@ async def generate_placement(
         
         print(f"✅ Генерация завершена за {generation_time:.2f}с")
         
+        try:
+            db.log_visit(client_ip, request.headers.get("user-agent", ""), "/api/generate", "POST")
+        except Exception:
+            pass
         return {
             "success": True,
             "result_image_path": result_path,

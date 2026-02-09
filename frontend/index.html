@@ -83,6 +83,7 @@
                             <div id="catalogGrid" class="catalog-grid catalog-grid-horizontal">
                                 <p class="empty-catalog">Каталог загружается...</p>
                             </div>
+                            <button type="button" class="btn-primary catalog-apply-btn" id="catalogApplyBtn" style="margin-top: 1rem;">Применить</button>
                         </div>
                     </div>
                 </div>
@@ -102,6 +103,7 @@
                 </div>
                 
                 <p class="trial-status" id="trialStatus">Пробных визуализаций: 3 из 3</p>
+                <p class="trial-limit-reached" id="trialLimitReached" style="display: none;">Пробные визуализации закончились. Для продолжения свяжитесь с нами.</p>
                 <div class="mode-selection" id="placeModeSelection">
                     <button class="mode-btn active" id="autoMode">
                         <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -163,6 +165,9 @@
                     </div>
                 </div>
 
+                <p class="generate-hint generate-hint-disabled" id="generateHint" style="display: none;">
+                    Чтобы активировать кнопку, выберите новую мебель в блоке «Новая мебель» выше и нажмите <strong>«Применить»</strong> (если выбираете из каталога) или загрузите фото мебели.
+                </p>
                 <button class="btn-primary" id="generateBtn">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
@@ -187,8 +192,7 @@
                 <div id="loadingState" class="loading-state">
                     <div class="spinner"></div>
                     <p class="loading-main">Создаём визуализацию...</p>
-                    <p class="loading-wait-notice">Готовое фото появится через 15–20 секунд. Не закрывайте страницу.</p>
-                    <p class="loading-substep">Анализ интерьера и подбор оптимального размещения</p>
+                    <p class="loading-substep" id="loadingSubstep">Подготовка запроса...</p>
                 </div>
 
                 <div id="resultState" class="result-state" style="display: none;">

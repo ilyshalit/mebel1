@@ -81,16 +81,28 @@ class BackgroundRemover:
             return output_path
         
         try:
-            # Открываем изображение
             with open(input_path, 'rb') as input_file:
                 input_data = input_file.read()
             
-            # Удаляем фон
             output_data = remove(input_data)
-            
-            # Сохраняем
             output_image = Image.open(io.BytesIO(output_data))
-            output_image.save(output_path, 'PNG')
+            # Сохраняем во временный файл, чтобы не затирать оригинал
+            import tempfile
+            fd, temp_path = tempfile.mkstemp(suffix='.png')
+            try:
+                output_image.save(temp_path, 'PNG')
+                if self._is_result_mostly_empty(temp_path):
+                    print(f"⚠️  Результат удаления фона почти пустой, используем оригинал: {input_path}")
+                    return input_path
+                import shutil
+                shutil.copy(temp_path, output_path)
+            finally:
+                import os
+                try:
+                    os.close(fd)
+                    os.unlink(temp_path)
+                except Exception:
+                    pass
             
             print(f"✅ Фон удален (rembg): {output_path}")
             return output_path
@@ -102,6 +114,26 @@ class BackgroundRemover:
                 import shutil
                 shutil.copy(input_path, output_path)
             return output_path
+    
+    def _is_result_mostly_empty(self, image_path: str, min_visible_ratio: float = 0.02) -> bool:
+        """Проверяет, что после удаления фона осталось слишком мало объекта (пустой результат)."""
+        try:
+            img = Image.open(image_path)
+            img = img.convert("RGBA")
+            w, h = img.size
+            total = w * h
+            visible = 0
+            # Считаем непрозрачные и не белые пиксели (хотя бы с небольшой «сутью»)
+            for x in range(0, w, max(1, w // 100)):
+                for y in range(0, h, max(1, h // 100)):
+                    r, g, b, a = img.getpixel((x, y))
+                    if a > 30 and (r < 250 or g < 250 or b < 250):
+                        visible += 1
+            sample = (w // max(1, w // 100)) * (h // max(1, h // 100))
+            ratio = visible / max(1, sample)
+            return ratio < min_visible_ratio
+        except Exception:
+            return False
     
     def _remove_with_api(self, input_path: str, output_path: str) -> str:
         """
