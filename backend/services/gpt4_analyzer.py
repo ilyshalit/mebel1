@@ -152,6 +152,87 @@ class GPT4Analyzer:
             print(f"❌ Ошибка при анализе с Gemini: {e}")
             raise
     
+    def analyze_room_for_replace(self, room_image_path: str) -> Dict[str, Any]:
+        """
+        Анализирует фото комнаты и возвращает список мебели, которую можно заменить.
+        Используется в режиме «Заменить мебель»: ИИ предлагает, что заменить (диван, стол, кресло и т.д.).
+        
+        Returns:
+            {"items": [{"type": "sofa", "position": "left"}, {"type": "table", "position": "center"}, ...]}
+        """
+        try:
+            print(f"📤 Подготовка изображения комнаты для анализа (base64)...")
+            room_url = self.uploader.image_to_data_url(room_image_path)
+            if not room_url:
+                raise ValueError("Не удалось прочитать изображение комнаты")
+            
+            prompt = """Look at this room interior photo. List the main furniture pieces that are clearly visible (e.g. sofa, table, bed, chair, desk, cabinet, armchair).
+For each item provide: "type" (one word in English: sofa, table, bed, chair, desk, cabinet, armchair, etc.) and "position" (left / center / right, or "center of room").
+Return ONLY a valid JSON object, no markdown, no code block. Example:
+{"items": [{"type": "sofa", "position": "left"}, {"type": "table", "position": "center"}]}
+If you see no clear furniture, return {"items": []}."""
+            
+            payload = {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {"type": "image_url", "image_url": {"url": room_url}}
+                        ]
+                    }
+                ],
+                "stream": False,
+                "include_thoughts": False,
+                "reasoning_effort": "medium"
+            }
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json"
+            }
+            
+            for attempt in range(KIE_RETRY_COUNT):
+                response = requests.post(self.api_url, headers=headers, json=payload, timeout=60)
+                result = response.json()
+                if response.status_code == 422:
+                    raise ValueError("Не удалось отправить изображение в Gemini")
+                response.raise_for_status()
+                if result.get("code") == 500 and "maintained" in (result.get("msg") or "").lower():
+                    if attempt < KIE_RETRY_COUNT - 1:
+                        time.sleep(KIE_RETRY_DELAY)
+                        continue
+                    raise ValueError("Kie.ai временно недоступен")
+                break
+            
+            if not result or 'choices' not in result or len(result['choices']) == 0:
+                return {"items": []}
+            content = result['choices'][0].get('message', {}).get('content', '')
+            if not content:
+                return {"items": []}
+            # Убираем возможную обёртку в markdown
+            text = content.strip()
+            if text.startswith("```"):
+                text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+            data = json.loads(text)
+            items = data.get("items", [])
+            if not isinstance(items, list):
+                return {"items": []}
+            # Нормализуем: только type и position
+            out = []
+            for it in items:
+                if isinstance(it, dict) and it.get("type"):
+                    out.append({
+                        "type": str(it.get("type", "")).strip().lower() or "furniture",
+                        "position": str(it.get("position", "center")).strip().lower() or "center"
+                    })
+            return {"items": out}
+        except json.JSONDecodeError as e:
+            print(f"⚠️  Не удалось распарсить JSON анализа комнаты: {e}")
+            return {"items": []}
+        except Exception as e:
+            print(f"❌ Ошибка анализа комнаты для замены: {e}")
+            raise
+    
     def analyze_placement(
         self,
         room_image_path: str,

@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, Form
+from fastapi import FastAPI, File, UploadFile, HTTPException, Form, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -27,11 +27,12 @@ from backend.services.background_remover import BackgroundRemover
 from backend.services.nano_banana import NanoBananaService
 from backend.services.upsell import UpsellService
 from backend.utils.image_utils import save_uploaded_image
-from backend.utils.load_env import load_environment
+from backend.utils.load_env import load_environment, get_env_variable, get_env_optional
 from backend.models.schemas import (
     CatalogItem,
     ErrorResponse
 )
+from backend import database as db
 
 # Загружаем переменные окружения
 load_environment()
@@ -51,6 +52,21 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Учёт визитов в SQLite (data/visits.db) — все обращения к /api/* кроме админки
+@app.middleware("http")
+async def log_visits_middleware(request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    if path.startswith("/api/") and not path.startswith("/api/admin/"):
+        try:
+            ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (request.client.host if request.client else "")
+            ua = request.headers.get("user-agent", "")
+            db.log_visit(ip or "?", ua, path, request.method)
+        except Exception:
+            pass
+    return response
 
 # Директории (BASE_DIR уже определен выше)
 DATA_DIR = BASE_DIR / "data"
@@ -86,6 +102,9 @@ def save_catalog(items: List[Dict[str, Any]]):
 # Загружаем каталог при старте
 CATALOG_ITEMS: List[Dict[str, Any]] = load_catalog()
 
+# Инициализация БД визитов (SQLite: data/visits.db)
+db.init_db()
+
 
 def resolve_furniture_path(path: str) -> str:
     """
@@ -120,13 +139,35 @@ async def root():
         "message": "🛋️ Furniture Placement API",
         "version": "1.0.0",
         "endpoints": {
+            "admin_visits": "/api/admin/visits",
             "upload_room": "/api/upload/room",
             "upload_furniture": "/api/upload/furniture",
+            "analyze_room_replace": "/api/analyze-room-replace",
             "generate": "/api/generate",
             "catalog": "/api/catalog",
             "upsell": "/api/upsell"
         }
     }
+
+
+@app.get("/api/admin/visits")
+async def admin_get_visits(
+    limit: int = Query(500, ge=1, le=2000),
+    key: Optional[str] = Query(None),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+):
+    """
+    Список визитов из БД (data/visits.db). Доступ по ключу ADMIN_API_KEY из .env.
+    Передайте ключ в заголовке X-Admin-Key или в query: ?key=...
+    """
+    admin_key = get_env_optional("ADMIN_API_KEY")
+    if not admin_key:
+        raise HTTPException(503, "Учёт визитов отключён: не задан ADMIN_API_KEY в .env")
+    provided = x_admin_key or key
+    if provided != admin_key:
+        raise HTTPException(403, "Неверный ключ доступа")
+    visits = db.get_visits(limit=limit)
+    return {"success": True, "visits": visits, "total": len(visits)}
 
 
 @app.post("/api/upload/room")
@@ -194,11 +235,40 @@ async def upload_furniture(files: List[UploadFile] = File(...)):
         raise HTTPException(500, f"Ошибка загрузки: {str(e)}")
 
 
+def resolve_room_path(path: str) -> str:
+    """Путь к фото комнаты: абсолютный или относительно data/uploads."""
+    p = Path(path)
+    if p.is_absolute() and p.exists():
+        return str(p)
+    for candidate in (DATA_DIR / path, UPLOADS_DIR / p.name):
+        if candidate.exists():
+            return str(candidate)
+    return str(path)
+
+
+@app.post("/api/analyze-room-replace")
+async def analyze_room_for_replace(room_image_path: str = Form(...)):
+    """
+    Анализирует фото комнаты и возвращает список мебели, которую можно заменить
+    (диван, стол, кресло и т.д.). Используется в режиме «Заменить мебель».
+    """
+    try:
+        room_path = resolve_room_path(room_image_path)
+        result = gpt4_analyzer.analyze_room_for_replace(room_path)
+        return result
+    except Exception as e:
+        raise HTTPException(500, f"Ошибка анализа комнаты: {str(e)}")
+
+
 @app.post("/api/generate")
 async def generate_placement(
     room_image_path: str = Form(...),
     furniture_image_paths: str = Form(...),  # JSON array строка
     mode: str = Form(default="auto"),
+    # placement_mode: "place" — разместить в пустом месте, "replace" — заменить мебель в комнате
+    placement_mode: str = Form(default="place"),
+    # replace_what: что именно заменить (например "sofa on the left") — из анализа комнаты
+    replace_what: Optional[str] = Form(None),
     # manual bbox (в пикселях исходного изображения комнаты)
     manual_box_x: Optional[int] = Form(None),
     manual_box_y: Optional[int] = Form(None),
@@ -213,28 +283,55 @@ async def generate_placement(
     wall_alignment: str = Form(default="auto")
 ):
     """
-    Генерация результата с размещенной мебелью (поддержка до 5 предметов)
-    
-    Modes:
-    - auto: AI сам выбирает лучшее место для всех предметов
-    - manual: Пользователь указывает позицию (manual_x, manual_y)
-    
-    Используется Nano Banana Pro (Google DeepMind) через Kie.ai.
+    Генерация: размещение мебели (place) или замена мебели в комнате (replace).
+    placement_mode=replace: комната со старой мебелью + один новый предмет → замена.
     """
     try:
         import json
         start_time = time.time()
         
-        # Парсим массив путей к мебели (могут быть пути с другого ПК из catalog.json)
         furniture_paths = json.loads(furniture_image_paths)
         if not isinstance(furniture_paths, list) or len(furniture_paths) == 0:
             raise HTTPException(400, "furniture_image_paths должен быть непустым массивом")
-        if len(furniture_paths) > 5:
-            raise HTTPException(400, "Максимум 5 предметов мебели")
-        # Приводим пути к путям на этом сервере (каталог может содержать пути с Mac/другой машины)
         furniture_paths = [resolve_furniture_path(p) for p in furniture_paths]
         
-        # Формируем manual position если указан
+        # Режим «Заменить мебель»: один предмет, без анализа позиции
+        if (placement_mode or "").strip().lower() == "replace":
+            if len(furniture_paths) != 1:
+                raise HTTPException(400, "В режиме «Заменить мебель» выберите ровно один предмет (новую мебель)")
+            replace_hint = (replace_what or "").strip() or None
+            print(f"🔄 Режим замены: подставляем новую мебель вместо старой" + (f" ({replace_hint})" if replace_hint else "") + "...")
+            result_path = inpainting_service.place_furniture_replace(
+                resolve_room_path(room_image_path),
+                furniture_paths[0],
+                RESULTS_DIR,
+                replace_what=replace_hint
+            )
+            from backend.utils.image_utils import limit_image_size
+            result_path = limit_image_size(result_path, max_long_side=1200)
+            result_filename = Path(result_path).name
+            result_url = f"/results/{result_filename}"
+            generation_time = time.time() - start_time
+            print(f"✅ Замена завершена за {generation_time:.2f}с")
+            analysis = {
+                "room_analysis": {"style": "modern", "lighting": "natural"},
+                "furniture_analysis": {"type": "мебель", "style": "современный", "color": "нейтральный"},
+                "furniture_items": [{"index": 0, "type": "мебель", "placement": {}}]
+            }
+            return {
+                "success": True,
+                "result_image_path": result_path,
+                "result_image_url": result_url,
+                "generation_time": generation_time,
+                "model_used": inpainting_service.get_model_name(),
+                "preserves_original": False,
+                "analysis": analysis,
+                "furniture_count": 1
+            }
+        
+        if len(furniture_paths) > 5:
+            raise HTTPException(400, "Максимум 5 предметов мебели")
+        
         manual_position = None
         manual_box = None
         if mode == "manual":
@@ -357,46 +454,74 @@ async def generate_placement(
 
 @app.post("/api/upsell")
 async def get_upsell_recommendations(
-    furniture_analysis: Dict[str, Any] = Form(...),
-    room_analysis: Dict[str, Any] = Form(...)
+    furniture_analysis: str = Form(...),
+    room_analysis: str = Form(...),
+    exclude_paths: str = Form(default="[]")
 ):
     """
-    Получить рекомендации дополнительных товаров
+    Рекомендации допродаж из каталога: только то, что реально подойдёт.
+    exclude_paths — JSON-массив путей к мебели, которую уже разместили (не рекомендуем её снова).
     """
     try:
-        # Если каталог пуст, возвращаем пустой список
+        furniture_data = json.loads(furniture_analysis) if isinstance(furniture_analysis, str) else furniture_analysis
+        room_data = json.loads(room_analysis) if isinstance(room_analysis, str) else room_analysis
+        exclude_list = json.loads(exclude_paths) if isinstance(exclude_paths, str) and exclude_paths.strip() else []
+        if not isinstance(exclude_list, list):
+            exclude_list = []
+    except (json.JSONDecodeError, TypeError):
+        furniture_data = {}
+        room_data = {}
+        exclude_list = []
+    
+    try:
         if not CATALOG_ITEMS:
-            return {
-                "success": True,
-                "recommendations": []
-            }
+            return {"success": True, "recommendations": []}
         
-        # Генерируем рекомендации
         recommendations = upsell_service.generate_recommendations(
-            furniture_analysis,
-            room_analysis,
+            furniture_data,
+            room_data,
             CATALOG_ITEMS,
-            max_recommendations=4
+            max_recommendations=4,
+            exclude_item_paths=exclude_list
         )
         
-        return {
-            "success": True,
-            "recommendations": recommendations
-        }
+        if not recommendations:
+            furniture_type = furniture_data.get("type", "мебель") if isinstance(furniture_data, dict) else "мебель"
+            room_style = room_data.get("style", "") if isinstance(room_data, dict) else ""
+            simple_recs = upsell_service.get_simple_recommendations(
+                furniture_type,
+                CATALOG_ITEMS,
+                count=4,
+                exclude_item_paths=exclude_list,
+                room_style=room_style
+            )
+            recommendations = simple_recs
+        
+        # Если нечего рекомендовать (всё из каталога уже применили) — сообщение пользователю
+        message = None
+        if not recommendations and CATALOG_ITEMS:
+            message = (
+                "Вы уже применили все предметы из каталога. "
+                "Добавьте в каталог светильники, тумбочки, стулья, столы — и появятся новые рекомендации."
+            )
+        return {"success": True, "recommendations": recommendations, "message": message}
         
     except Exception as e:
         print(f"⚠️  Ошибка генерации рекомендаций: {e}")
-        # В случае ошибки возвращаем простые рекомендации
-        furniture_type = furniture_analysis.get('type', 'мебель')
+        furniture_type = furniture_data.get("type", "мебель") if isinstance(furniture_data, dict) else "мебель"
+        room_style = room_data.get("style", "") if isinstance(room_data, dict) else ""
         simple_recs = upsell_service.get_simple_recommendations(
             furniture_type,
             CATALOG_ITEMS,
-            count=3
+            count=4,
+            exclude_item_paths=exclude_list,
+            room_style=room_style
         )
-        return {
-            "success": True,
-            "recommendations": simple_recs
-        }
+        message = (
+            "Вы уже применили все предметы из каталога. "
+            "Добавьте в каталог светильники, тумбочки, стулья, столы — и появятся новые рекомендации."
+        ) if not simple_recs and CATALOG_ITEMS else None
+        return {"success": True, "recommendations": simple_recs, "message": message}
 
 
 @app.get("/api/catalog")

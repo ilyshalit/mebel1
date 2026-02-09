@@ -18,6 +18,9 @@ function catalogImageUrl(item) {
 let roomImagePath = null;
 let furnitureImagePaths = []; // Массив путей к мебели
 let selectedMode = 'auto';
+let placementMode = 'place'; // 'place' | 'replace' — разместить или заменить мебель
+let roomFurnitureItems = []; // Результат анализа комнаты для режима замены: [{type, position}]
+let replaceWhat = null;      // Выбранный предмет для замены (например "sofa on the left")
 let manualPosition = null;
 let manualBox = null; // {x, y, w, h} in image pixels
 let catalogItems = [];
@@ -58,10 +61,71 @@ const tabContents = document.querySelectorAll('.tab-content');
 document.addEventListener('DOMContentLoaded', () => {
     initDropZones();
     initTabs();
+    initPlacementMode();
     initModeSelection();
     initCanvas();
     loadCatalog();
 });
+
+// Режим: разместить мебель / заменить мебель в комнате
+function initPlacementMode() {
+    const placeBtn = document.getElementById('placeModeBtn');
+    const replaceBtn = document.getElementById('replaceModeBtn');
+    const hint = document.getElementById('placementModeHint');
+    const roomTitle = document.getElementById('roomUploadTitle');
+    const furnitureTitle = document.getElementById('furnitureUploadTitle');
+    const furnitureDropText = document.getElementById('furnitureDropZoneText');
+    const step2Title = document.getElementById('step2Title');
+    const replaceModeMessage = document.getElementById('replaceModeMessage');
+    const placeModeSelection = document.getElementById('placeModeSelection');
+
+    function setPlacementMode(mode) {
+        placementMode = mode;
+        placeBtn.classList.toggle('active', mode === 'place');
+        replaceBtn.classList.toggle('active', mode === 'replace');
+        if (hint) {
+            hint.textContent = mode === 'place'
+                ? 'Загрузите фото комнаты и выберите мебель — ИИ разместит её в интерьере.'
+                : 'Загрузите фото комнаты со старой мебелью и выберите новую — ИИ заменит старую на новую.';
+        }
+        if (roomTitle) {
+            roomTitle.textContent = mode === 'place'
+                ? '📷 Фотография Интерьера'
+                : '📷 Комната с мебелью, которую заменить';
+        }
+        if (furnitureTitle) {
+            furnitureTitle.textContent = mode === 'place'
+                ? '🪑 Предметы Мебели'
+                : '🪑 Новая мебель (на что заменить)';
+        }
+        if (furnitureDropText) {
+            furnitureDropText.textContent = mode === 'place'
+                ? 'Загрузите до 5 предметов мебели'
+                : 'Выберите один предмет (новую мебель)';
+        }
+        if (step2Title) {
+            step2Title.textContent = mode === 'place' ? 'Режим Размещения' : 'Заменить мебель';
+        }
+        if (replaceModeMessage) replaceModeMessage.style.display = mode === 'replace' ? 'block' : 'none';
+        if (placeModeSelection) placeModeSelection.style.display = mode === 'place' ? 'flex' : 'none';
+        const replaceWhatBlock = document.getElementById('replaceWhatSelection');
+        if (replaceWhatBlock) replaceWhatBlock.style.display = mode === 'replace' ? 'block' : 'none';
+        if (mode === 'replace' && roomImagePath) {
+            analyzeRoomForReplace();
+        } else if (mode === 'place') {
+            roomFurnitureItems = [];
+            replaceWhat = null;
+            renderReplaceWhatButtons();
+        }
+        if (mode === 'replace' && furnitureImagePaths.length > 1) {
+            furnitureImagePaths = furnitureImagePaths.slice(0, 1);
+            renderFurniturePreviews();
+        }
+    }
+
+    placeBtn.addEventListener('click', () => setPlacementMode('place'));
+    replaceBtn.addEventListener('click', () => setPlacementMode('replace'));
+}
 
 // Drop Zones
 function initDropZones() {
@@ -138,6 +202,7 @@ async function uploadRoomImage(file) {
         if (data.success) {
             roomImagePath = data.file_path;
             roomImageElement = roomPreview;
+            if (placementMode === 'replace') await analyzeRoomForReplace();
             checkReadyToGenerate();
         } else {
             alert('Ошибка загрузки комнаты');
@@ -151,10 +216,11 @@ async function uploadRoomImage(file) {
 // Upload Furniture Images (multiple support)
 async function uploadFurnitureImage(files) {
     try {
-        // Принимаем либо один файл, либо массив
-        const fileArray = Array.isArray(files) ? files : [files];
-        
-        if (fileArray.length > 5) {
+        let fileArray = Array.isArray(files) ? files : [files];
+        if (placementMode === 'replace') {
+            fileArray = fileArray.slice(0, 1);
+            if (files.length > 1) alert('В режиме «Заменить мебель» загружается только один предмет.');
+        } else if (fileArray.length > 5) {
             alert('Максимум 5 предметов мебели');
             return;
         }
@@ -301,13 +367,12 @@ function renderCatalog() {
             document.querySelectorAll('.catalog-item').forEach(i => i.classList.remove('selected'));
             item.classList.add('selected');
             
-            // Для множественной загрузки добавляем в массив
-            if (!furnitureImagePaths.includes(item.dataset.path)) {
+            if (placementMode === 'replace') {
+                furnitureImagePaths = [item.dataset.path];
+                renderFurniturePreviews([{ file_path: item.dataset.path, filename: item.querySelector('img').alt }]);
+            } else if (!furnitureImagePaths.includes(item.dataset.path)) {
                 furnitureImagePaths.push(item.dataset.path);
-                renderFurniturePreviews([{
-                    file_path: item.dataset.path,
-                    filename: item.querySelector('img').alt
-                }]);
+                renderFurniturePreviews([{ file_path: item.dataset.path, filename: item.querySelector('img').alt }]);
             }
             
             checkReadyToGenerate();
@@ -330,7 +395,7 @@ function renderCatalogPreview() {
     catalogPreview.style.display = 'block';
     
     // Show first 6 items
-    catalogPreviewGrid.innerHTML = catalogItems.slice(0, 6).map(item => `
+    catalogPreviewGrid.innerHTML = catalogItems.slice(0, 12).map(item => `
         <div class="product-card" data-id="${item.id}" data-path="${item.image_path}">
             <img src="${catalogImageUrl(item)}" alt="${item.name}">
             <div class="product-card-content">
@@ -355,16 +420,17 @@ function renderCatalogPreview() {
 }
 
 function selectFurnitureFromCatalog(path) {
-    // Добавляем в массив мебели
-    if (!furnitureImagePaths.includes(path)) {
+    if (placementMode === 'replace') {
+        furnitureImagePaths = [path];
+    } else if (!furnitureImagePaths.includes(path)) {
         furnitureImagePaths.push(path);
-        
-        // Показываем превью (упрощенная версия)
+    }
+    if (furnitureImagePaths.length) {
         const dropContent = furnitureDropZone.querySelector('.drop-zone-content');
         if (dropContent) dropContent.style.display = 'none';
         furniturePreviewGrid.style.display = 'grid';
-        
-        // Находим имя товара
+        if (placementMode === 'replace') furniturePreviewGrid.innerHTML = '';
+
         const item = catalogItems.find(i => i.image_path === path);
         const previewHtml = `
             <div class="furniture-preview-item">
@@ -542,11 +608,79 @@ function drawRoomOnCanvas() {
     }
 }
 
+// Анализ комнаты для режима «Заменить»: ИИ предлагает, что заменить (диван, стол и т.д.)
+async function analyzeRoomForReplace() {
+    const container = document.getElementById('replaceWhatButtons');
+    const hint = document.getElementById('replaceWhatHint');
+    if (!container) return;
+    container.innerHTML = '<span class="analyzing-text">Анализируем комнату...</span>';
+    if (hint) hint.style.display = 'none';
+    roomFurnitureItems = [];
+    replaceWhat = null;
+    try {
+        const formData = new FormData();
+        formData.append('room_image_path', roomImagePath);
+        const response = await fetch(`${API_BASE_URL}/api/analyze-room-replace`, {
+            method: 'POST',
+            body: formData
+        });
+        const data = await response.json();
+        if (data.items && data.items.length > 0) {
+            roomFurnitureItems = data.items;
+        }
+    } catch (e) {
+        console.error('Analyze room for replace:', e);
+        if (hint) { hint.textContent = 'Не удалось проанализировать комнату. Можно создать визуализацию без выбора — ИИ попробует определить объект сам.'; hint.style.display = 'block'; }
+    }
+    renderReplaceWhatButtons();
+}
+
+// Подписи типов мебели по-русски
+const furnitureTypeLabels = {
+    sofa: 'Диван', table: 'Стол', bed: 'Кровать', chair: 'Стул', desk: 'Стол (письменный)',
+    cabinet: 'Шкаф', armchair: 'Кресло', shelf: 'Полка', lamp: 'Лампа'
+};
+function furnitureLabel(type) {
+    return furnitureTypeLabels[type] || type;
+}
+
+function renderReplaceWhatButtons() {
+    const container = document.getElementById('replaceWhatButtons');
+    const hint = document.getElementById('replaceWhatHint');
+    if (!container) return;
+    if (!roomFurnitureItems || roomFurnitureItems.length === 0) {
+        container.innerHTML = '';
+        if (hint) { hint.textContent = 'Мебель в комнате не определена. Создайте визуализацию — ИИ попробует заменить подходящий объект.'; hint.style.display = 'block'; }
+        return;
+    }
+    if (hint) hint.style.display = 'block';
+    container.innerHTML = roomFurnitureItems.map((it, i) => {
+        const pos = (it.position || 'center').toLowerCase();
+        const posRu = pos === 'center' ? 'в центре' : pos === 'left' ? 'слева' : pos === 'right' ? 'справа' : pos;
+        const label = furnitureLabel(it.type) + ' (' + posRu + ')';
+        const value = pos === 'center' ? `${it.type} in the center` : `${it.type} on the ${pos}`;
+        const active = replaceWhat === value ? ' active' : '';
+        return `<button type="button" class="replace-what-btn${active}" data-replace-value="${value.replace(/"/g, '&quot;')}">${label}</button>`;
+    }).join('');
+    container.querySelectorAll('.replace-what-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            replaceWhat = btn.dataset.replaceValue;
+            container.querySelectorAll('.replace-what-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+        });
+    });
+}
+
 // Check if ready to generate
 function checkReadyToGenerate() {
     if (roomImagePath && furnitureImagePaths.length > 0) {
         step2.style.display = 'block';
         generateBtn.disabled = false;
+        if (placementMode === 'replace') {
+            const replaceWhatBlock = document.getElementById('replaceWhatSelection');
+            if (replaceWhatBlock) replaceWhatBlock.style.display = 'block';
+            if (roomFurnitureItems.length === 0 && roomImagePath) analyzeRoomForReplace();
+        }
     } else {
         generateBtn.disabled = true;
     }
@@ -554,6 +688,10 @@ function checkReadyToGenerate() {
 
 // Generate (Nano Banana Pro)
 generateBtn.addEventListener('click', async () => {
+    if (placementMode === 'replace' && furnitureImagePaths.length !== 1) {
+        alert('В режиме «Заменить мебель» выберите ровно один предмет — новую мебель.');
+        return;
+    }
     if (selectedMode === 'manual' && !manualBox) {
         alert('Выделите прямоугольником место на комнате где разместить мебель');
         return;
@@ -569,7 +707,12 @@ generateBtn.addEventListener('click', async () => {
         // Prepare form data
         const formData = new FormData();
         formData.append('room_image_path', roomImagePath);
-        formData.append('furniture_image_paths', JSON.stringify(furnitureImagePaths));
+        const pathsToSend = placementMode === 'replace' && furnitureImagePaths.length
+            ? [furnitureImagePaths[0]]
+            : furnitureImagePaths;
+        formData.append('furniture_image_paths', JSON.stringify(pathsToSend));
+        formData.append('placement_mode', placementMode);
+        if (placementMode === 'replace' && replaceWhat) formData.append('replace_what', replaceWhat);
         formData.append('mode', selectedMode);
         
         // rotation: 0 or 90
@@ -586,8 +729,10 @@ generateBtn.addEventListener('click', async () => {
             formData.append('manual_box_h', manualBox.h);
         }
         
-        // Update loading text based on model
-        updateLoadingText(`Анализ ${furnitureImagePaths.length} предмет(ов) мебели...`);
+        updateLoadingText(placementMode === 'replace'
+            ? 'Замена мебели в комнате...'
+            : `Анализ ${furnitureImagePaths.length} предмет(ов) мебели...`);
+        setLoadingNoticeVisible(true);
         
         // Call API
         const response = await fetch(`${API_BASE_URL}/api/generate`, {
@@ -598,56 +743,62 @@ generateBtn.addEventListener('click', async () => {
         const data = await response.json();
         
         if (data.success) {
-            // Show result
-            updateLoadingText('Готово!');
-            
-            setTimeout(() => {
+            updateLoadingText('Скачиваем изображение...');
+            const resultUrl = `${API_BASE_URL}${data.result_image_url}`;
+            generationTime.textContent = data.generation_time.toFixed(1);
+            const onImageReady = () => {
+                setLoadingNoticeVisible(false);
+                updateLoadingText('Готово!');
                 loadingState.style.display = 'none';
                 resultState.style.display = 'block';
-                
-                resultImage.src = `${API_BASE_URL}${data.result_image_url}`;
-                generationTime.textContent = data.generation_time.toFixed(1);
-                
-                // Показываем какая модель использовалась
                 if (data.model_used) {
                     console.log(`Использована модель: ${data.model_used}`);
                     console.log(`Размещено предметов: ${data.furniture_count || 1}`);
                 }
-                
-                // Load upsell recommendations
-                loadUpsellRecommendations(data.analysis);
-            }, 500);
+                loadUpsellRecommendations(data.analysis, furnitureImagePaths);
+            };
+            resultImage.onload = onImageReady;
+            resultImage.onerror = () => {
+                updateLoadingText('Ошибка загрузки изображения');
+                onImageReady();
+            };
+            resultImage.src = resultUrl;
         } else {
             throw new Error(data.error || 'Ошибка генерации');
         }
     } catch (error) {
         console.error('Generation error:', error);
+        setLoadingNoticeVisible(false);
         loadingState.style.display = 'none';
         alert(`Ошибка генерации: ${error.message}`);
     }
 });
 
-function updateLoadingText(text) {
-    document.querySelector('.loading-substep').textContent = text;
+function setLoadingNoticeVisible(visible) {
+    const notice = document.querySelector('.loading-wait-notice');
+    if (notice) notice.style.display = visible ? 'block' : 'none';
 }
 
-// Upsell recommendations
-async function loadUpsellRecommendations(analysis) {
+function updateLoadingText(text) {
+    const substep = document.querySelector('.loading-substep');
+    if (substep) substep.textContent = text === 'Готово!' ? '' : text;
+}
+
+// Upsell recommendations — только релевантные товары, без уже размещённых
+async function loadUpsellRecommendations(analysis, placedPaths) {
     try {
-        // Если каталог пустой, не показываем секцию
         if (!catalogItems || catalogItems.length === 0) {
             document.getElementById('upsellSection').style.display = 'none';
             return;
         }
         
         const formData = new FormData();
-        
-        // Извлекаем данные о мебели
         const furnitureData = analysis.furniture_analysis || analysis.furniture_items?.[0] || {};
         const roomData = analysis.room_analysis || {};
         
         formData.append('furniture_analysis', JSON.stringify(furnitureData));
         formData.append('room_analysis', JSON.stringify(roomData));
+        formData.append('exclude_paths', JSON.stringify(placedPaths || []));
         
         const response = await fetch(`${API_BASE_URL}/api/upsell`, {
             method: 'POST',
@@ -655,12 +806,23 @@ async function loadUpsellRecommendations(analysis) {
         });
         
         const data = await response.json();
+        const upsellSection = document.getElementById('upsellSection');
+        const upsellGrid = document.getElementById('upsellGrid');
+        const upsellMessage = document.getElementById('upsellMessage');
         
         if (data.success && data.recommendations.length > 0) {
-            document.getElementById('upsellSection').style.display = 'block';
+            upsellSection.style.display = 'block';
+            if (upsellMessage) upsellMessage.style.display = 'none';
+            if (upsellGrid) upsellGrid.style.display = 'grid';
             renderUpsellRecommendations(data.recommendations);
+        } else if (data.success && data.message) {
+            upsellSection.style.display = 'block';
+            if (upsellGrid) upsellGrid.style.display = 'none';
+            const msgEl = document.getElementById('upsellMessageText');
+            if (msgEl) msgEl.textContent = data.message;
+            if (upsellMessage) upsellMessage.style.display = 'block';
         } else {
-            document.getElementById('upsellSection').style.display = 'none';
+            upsellSection.style.display = 'none';
         }
     } catch (error) {
         console.error('Error loading upsell:', error);

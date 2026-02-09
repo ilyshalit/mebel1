@@ -1,6 +1,8 @@
 """
-Сервис для генерации рекомендаций доп товаров (upsell) через Gemini
+Сервис для генерации рекомендаций доп товаров (upsell) через Gemini.
+Рекомендуем только то, что реально подходит по стилю и функции.
 """
+from pathlib import Path
 from typing import List, Dict, Any
 import json
 import requests
@@ -23,26 +25,25 @@ class UpsellService:
         placed_furniture: Dict[str, Any],
         room_analysis: Dict[str, Any],
         catalog_items: List[Dict[str, Any]],
-        max_recommendations: int = 4
+        max_recommendations: int = 4,
+        exclude_item_paths: List[str] = None
     ) -> List[Dict[str, Any]]:
         """
-        Генерирует рекомендации дополнительных товаров через Gemini
-        
-        Args:
-            placed_furniture: Информация о размещенной мебели
-            room_analysis: Анализ комнаты
-            catalog_items: Список товаров из каталога
-            max_recommendations: Максимальное количество рекомендаций
-            
-        Returns:
-            Список рекомендованных товаров с объяснениями
+        Генерирует рекомендации дополнительных товаров через Gemini.
+        Рекомендует только то, что реально подходит по стилю и функции; не рекомендует уже размещённое.
         """
+        exclude_item_paths = exclude_item_paths or []
+        catalog_available = self._exclude_placed_from_catalog(catalog_items, exclude_item_paths)
+        # Не подставляем весь каталог, если пользователь уже всё применил — рекомендуем только оставшееся
+        if len(catalog_available) < max_recommendations:
+            pass  # работаем с тем, что осталось; пустой список вернётся и бэкенд отдаст сообщение
+        if not catalog_available:
+            return []
         try:
-            # Формируем промпт
             prompt = self._create_upsell_prompt(
                 placed_furniture,
                 room_analysis,
-                catalog_items,
+                catalog_available,
                 max_recommendations
             )
             
@@ -82,7 +83,7 @@ class UpsellService:
             # Извлекаем ответ
             if 'choices' in result and len(result['choices']) > 0:
                 content = result['choices'][0]['message']['content']
-                recommendations = self._parse_recommendations(content, catalog_items)
+                recommendations = self._parse_recommendations(content, catalog_available)
                 return recommendations[:max_recommendations]
             else:
                 print(f"⚠️  Нет ответа от Gemini для upsell")
@@ -92,6 +93,20 @@ class UpsellService:
             print(f"❌ Ошибка генерации рекомендаций: {e}")
             return []
     
+    def _exclude_placed_from_catalog(
+        self,
+        catalog_items: List[Dict[str, Any]],
+        exclude_paths: List[str]
+    ) -> List[Dict[str, Any]]:
+        """Исключает из каталога товары, которые пользователь уже разместил в этой визуализации."""
+        if not exclude_paths:
+            return list(catalog_items)
+        exclude_names = {Path(p).name.lower() for p in exclude_paths}
+        return [
+            item for item in catalog_items
+            if Path(item.get("image_path", "")).name.lower() not in exclude_names
+        ]
+
     def _create_upsell_prompt(
         self,
         placed_furniture: Dict[str, Any],
@@ -99,56 +114,44 @@ class UpsellService:
         catalog_items: List[Dict[str, Any]],
         max_recommendations: int
     ) -> str:
-        """Создает промпт для генерации рекомендаций"""
-        
-        # Информация о размещенной мебели
+        """Промпт: рекомендуй только товары из списка, реально подходящие по стилю и функции."""
         furniture_type = placed_furniture.get('type', 'мебель')
         furniture_style = placed_furniture.get('style', 'современный')
         furniture_color = placed_furniture.get('color', 'нейтральный')
-        
-        # Информация о комнате
         room_style = room_analysis.get('style', 'современный')
         room_lighting = room_analysis.get('lighting', 'естественное')
         
-        # Формируем список товаров из каталога
+        names_list = [item['name'] for item in catalog_items]
         catalog_text = "\n".join([
-            f"- {item['name']}: {item.get('description', '')} (стиль: {item.get('style', 'N/A')}, цена: {item.get('price', 'N/A')})"
+            f"- «{item['name']}»: {item.get('description', '')} (стиль: {item.get('style', '')}, тип: {item.get('type', '')})"
             for item in catalog_items
         ])
         
-        prompt = f"""Ты эксперт по продажам мебели и интерьерному дизайну.
+        return f"""Ты эксперт по интерьерному дизайну и подбору мебели.
 
-Клиент только что разместил в своей комнате: {furniture_type}
-Характеристики выбранной мебели:
-- Стиль: {furniture_style}
-- Цвет: {furniture_color}
+Клиент только что разместил в комнате: {furniture_type}. Стиль мебели: {furniture_style}, цвет: {furniture_color}.
+Комната: стиль {room_style}, освещение {room_lighting}.
 
-Характеристики комнаты:
-- Стиль интерьера: {room_style}
-- Освещение: {room_lighting}
-
-Доступные товары в каталоге:
+Доступные товары в каталоге (рекомендовать можно ТОЛЬКО их, другими словами — нельзя):
 {catalog_text}
 
-Порекомендуй {max_recommendations} товара из каталога, которые:
-1. Стилистически сочетаются с выбранной мебелью
-2. Функционально дополняют интерьер
-3. Помогут создать завершенную композицию
+Задача: порекомендуй ровно {max_recommendations} товара из этого списка, которые РЕАЛЬНО подойдут:
+1. По стилю — сочетаются с уже размещённой мебелью и комнатой.
+2. По функции — логично дополняют интерьер (например к кровати — тумбочка/светильник, к дивану — кресло/столик).
+3. НЕ рекомендуй то, что клиент уже разместил (в списке выше только то, что ещё можно предложить).
 
-Для каждой рекомендации объясни ПОЧЕМУ это подходит и КАКУЮ ПОЛЬЗУ принесет (1-2 убедительных предложения).
+Критично: в ответе в поле item_name указывай ТОЧНО название из каталога, без изменений. Допустимые названия: {names_list}.
 
-Формат ответа СТРОГО в JSON:
+Формат ответа — только JSON, без текста до и после:
 {{
   "recommendations": [
     {{
-      "item_name": "название товара из каталога",
-      "reason": "почему этот товар идеально подходит и какую пользу принесет",
+      "item_name": "точное название из каталога",
+      "reason": "кратко: почему именно этот товар подойдёт в этот интерьер",
       "category": "функциональное дополнение / стилистическое сочетание / акцент"
     }}
   ]
 }}"""
-        
-        return prompt
     
     def _parse_recommendations(
         self,
@@ -180,24 +183,27 @@ class UpsellService:
             
             data = json.loads(json_str)
             recommendations = []
+            seen_ids = set()
             
-            # Создаем индекс товаров по имени
-            catalog_index = {item['name'].lower(): item for item in catalog_items}
+            # Точное совпадение по имени, затем по вхождению
+            catalog_by_name = {item['name'].strip(): item for item in catalog_items}
+            catalog_by_name_lower = {k.lower(): v for k, v in catalog_by_name.items()}
             
             for rec in data.get('recommendations', []):
-                item_name = rec.get('item_name', '')
-                
-                # Ищем товар в каталоге
-                catalog_item = None
-                for key, value in catalog_index.items():
-                    if key in item_name.lower() or item_name.lower() in key:
-                        catalog_item = value
-                        break
-                
-                if catalog_item:
+                item_name = (rec.get('item_name') or '').strip()
+                if not item_name:
+                    continue
+                catalog_item = catalog_by_name.get(item_name) or catalog_by_name_lower.get(item_name.lower())
+                if not catalog_item:
+                    for cname, citem in catalog_by_name_lower.items():
+                        if item_name.lower() in cname or cname in item_name.lower():
+                            catalog_item = citem
+                            break
+                if catalog_item and catalog_item.get('id') not in seen_ids:
+                    seen_ids.add(catalog_item.get('id'))
                     recommendations.append({
                         **catalog_item,
-                        'recommendation_reason': rec.get('reason', ''),
+                        'recommendation_reason': rec.get('reason', 'Подойдёт к вашему интерьеру'),
                         'recommendation_category': rec.get('category', 'дополнение')
                     })
             
@@ -212,49 +218,62 @@ class UpsellService:
         self,
         furniture_type: str,
         catalog_items: List[Dict[str, Any]],
-        count: int = 3
+        count: int = 3,
+        exclude_item_paths: List[str] = None,
+        room_style: str = ""
     ) -> List[Dict[str, Any]]:
         """
-        Простые рекомендации без AI (fallback)
-        
-        Args:
-            furniture_type: Тип размещенной мебели
-            catalog_items: Каталог товаров
-            count: Количество рекомендаций
-            
-        Returns:
-            Список рекомендаций
+        Рекомендации без AI (fallback): по типу мебели и стилю комнаты.
+        Исключаем уже размещённое; даём конкретную причину по каждому товару.
         """
-        # Простая логика: рекомендуем комплементарные товары
+        available = self._exclude_placed_from_catalog(catalog_items, exclude_item_paths or [])
+        if not available:
+            return []
+        
+        # Что логично дополняет уже размещённое
         complements = {
-            'диван': ['кресло', 'журнальный столик', 'торшер', 'подушки'],
-            'кровать': ['тумбочка', 'комод', 'светильник', 'зеркало'],
-            'стол': ['стулья', 'люстра', 'ваза'],
-            'кресло': ['торшер', 'журнальный столик', 'подставка для ног'],
-            'шкаф': ['зеркало', 'пуф', 'вешалка']
+            'диван': ['кресло', 'столик', 'торшер', 'пуф'],
+            'кровать': ['кресло', 'тумбочка', 'комод', 'светильник', 'зеркало'],
+            'стол': ['стул', 'кресло', 'люстра'],
+            'кресло': ['торшер', 'столик', 'кровать', 'диван'],
+            'шкаф': ['зеркало', 'пуф', 'вешалка'],
+            'мебель': ['кресло', 'кровать', 'стол'],
         }
+        ft_lower = (furniture_type or "мебель").lower()
+        keywords = complements.get(ft_lower, complements['мебель'])
+        style_words = (room_style or "").lower().split()
         
-        keywords = complements.get(furniture_type.lower(), [])
-        
-        # Фильтруем товары по ключевым словам
         recommendations = []
-        for item in catalog_items:
-            item_name_lower = item.get('name', '').lower()
-            item_desc_lower = item.get('description', '').lower()
-            
-            for keyword in keywords:
-                if keyword in item_name_lower or keyword in item_desc_lower:
-                    recommendations.append(item)
+        for item in available:
+            name = item.get('name', '').lower()
+            desc = (item.get('description') or '').lower()
+            typ = (item.get('type') or '').lower()
+            style = (item.get('style') or '').lower()
+            for kw in keywords:
+                if kw in name or kw in desc or kw in typ:
+                    reason = f"Дополняет {furniture_type}: подойдёт по стилю и функции."
+                    if style_words and any(s in style for s in style_words):
+                        reason = f"Сочетается со стилем интерьера и дополняет {furniture_type}."
+                    recommendations.append({
+                        **item,
+                        'recommendation_reason': reason,
+                        'recommendation_category': 'дополнение'
+                    })
                     break
-            
             if len(recommendations) >= count:
                 break
         
-        # Если недостаточно, добавляем случайные
         if len(recommendations) < count:
-            for item in catalog_items:
-                if item not in recommendations:
-                    recommendations.append(item)
+            seen = {r.get('id') for r in recommendations}
+            for item in available:
+                if item.get('id') in seen:
+                    continue
+                seen.add(item.get('id'))
+                recommendations.append({
+                    **item,
+                    'recommendation_reason': f"Подойдёт к вашему интерьеру и сочетается с {furniture_type}.",
+                    'recommendation_category': 'дополнение'
+                })
                 if len(recommendations) >= count:
                     break
         

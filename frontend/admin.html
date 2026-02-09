@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Визиты — просмотр БД</title>
+    <link rel="stylesheet" href="css/style.css">
+    <style>
+        .admin-page { max-width: 1000px; margin: 0 auto; padding: 2rem; }
+        .admin-page h1 { font-size: 1.5rem; margin-bottom: 1rem; }
+        .admin-form { margin-bottom: 1.5rem; display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; }
+        .admin-form input[type="password"] { padding: 0.5rem 0.75rem; width: 220px; border: 1px solid var(--color-warm-gray-300); border-radius: 6px; }
+        .admin-form button { padding: 0.5rem 1rem; background: var(--color-accent); color: #fff; border: none; border-radius: 6px; cursor: pointer; }
+        .admin-form button:hover { opacity: 0.9; }
+        .visits-table { width: 100%; border-collapse: collapse; font-size: 0.875rem; margin-top: 1rem; }
+        .visits-table th, .visits-table td { padding: 0.5rem 0.75rem; text-align: left; border-bottom: 1px solid var(--color-warm-gray-200); }
+        .visits-table th { background: var(--color-warm-gray-100); font-weight: 600; }
+        .visits-table td { color: var(--color-warm-gray-700); }
+        .visits-table .ua { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .visits-table .time { white-space: nowrap; }
+        .error-msg { color: #c00; margin-top: 0.5rem; }
+        .back-link { display: inline-block; margin-bottom: 1rem; color: var(--color-accent); }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="admin-page">
+            <a href="index.html" class="back-link">← На главную</a>
+            <h1>Посетители и обращения к API</h1>
+            <p style="color: var(--color-warm-gray-600); margin-bottom: 1rem;">Данные из БД <code>data/visits.db</code>. Ключ доступа — <code>ADMIN_API_KEY</code> из .env.</p>
+            <div class="admin-form">
+                <input type="password" id="adminKey" placeholder="Ключ ADMIN_API_KEY">
+                <button type="button" id="loadBtn">Загрузить визиты</button>
+                <span id="statusMsg" class="error-msg"></span>
+            </div>
+            <div id="tableWrap"></div>
+        </div>
+    </div>
+    <script>
+        const API_BASE = window.location.port === '8080'
+            ? `${window.location.protocol}//${window.location.hostname}:8000`
+            : window.location.origin;
+        const loadBtn = document.getElementById('loadBtn');
+        const adminKey = document.getElementById('adminKey');
+        const statusMsg = document.getElementById('statusMsg');
+        const tableWrap = document.getElementById('tableWrap');
+
+        loadBtn.addEventListener('click', async () => {
+            const key = adminKey.value.trim();
+            statusMsg.textContent = '';
+            tableWrap.innerHTML = '';
+            if (!key) {
+                statusMsg.textContent = 'Введите ключ из .env (ADMIN_API_KEY).';
+                return;
+            }
+            loadBtn.disabled = true;
+            try {
+                const r = await fetch(`${API_BASE}/api/admin/visits?limit=500`, {
+                    headers: { 'X-Admin-Key': key }
+                });
+                const data = await r.json();
+                if (!r.ok) {
+                    statusMsg.textContent = data.detail || r.statusText || 'Ошибка доступа';
+                    return;
+                }
+                if (!data.visits || data.visits.length === 0) {
+                    tableWrap.innerHTML = '<p>Записей пока нет.</p>';
+                    return;
+                }
+                let html = '<table class="visits-table"><thead><tr><th>ID</th><th>Время (UTC)</th><th>IP</th><th>Метод</th><th>Путь</th><th>User-Agent</th></tr></thead><tbody>';
+                data.visits.forEach(v => {
+                    html += `<tr><td>${v.id}</td><td class="time">${v.created_at || ''}</td><td>${escapeHtml(v.ip_address || '')}</td><td>${escapeHtml(v.method || '')}</td><td>${escapeHtml(v.path || '')}</td><td class="ua" title="${escapeHtml(v.user_agent || '')}">${escapeHtml(v.user_agent || '')}</td></tr>`;
+                });
+                html += '</tbody></table>';
+                tableWrap.innerHTML = html + `<p style="margin-top:0.75rem;color:var(--color-warm-gray-600);">Показано: ${data.visits.length}</p>`;
+            } catch (e) {
+                statusMsg.textContent = 'Ошибка: ' + e.message;
+            } finally {
+                loadBtn.disabled = false;
+            }
+        });
+
+        function escapeHtml(s) {
+            const div = document.createElement('div');
+            div.textContent = s;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>

@@ -6,7 +6,7 @@ import time
 import requests
 import json
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from PIL import Image
 import uuid
 import os
@@ -133,7 +133,7 @@ class NanoBananaService(BaseInpaintingService):
                     "prompt": prompt,
                     "image_input": [room_url, collage_url],
                     "aspect_ratio": aspect_ratio,
-                    "resolution": "2K",
+                    "resolution": "1K",
                     "output_format": "png"
                 }
             }
@@ -166,6 +166,78 @@ class NanoBananaService(BaseInpaintingService):
             except Exception:
                 pass
     
+    def place_furniture_replace(
+        self,
+        room_image_path: str,
+        furniture_image_path: str,
+        output_dir: Path,
+        replace_what: Optional[str] = None
+    ) -> str:
+        """
+        Заменяет существующую мебель в комнате на новую (например старый диван на новый).
+        Первое изображение — комната со старой мебелью, второе — новая мебель.
+        replace_what: подсказка, что именно заменить (например "sofa on the left"), из анализа комнаты.
+        """
+        try:
+            print(f"🔄 Режим замены: подставляем новую мебель вместо старой в комнате...")
+            room_url = self.uploader.upload_image(room_image_path, expiration=600)
+            if not room_url:
+                room_url = self.uploader.image_to_data_url(room_image_path)
+            if not room_url:
+                raise ValueError("Не удалось загрузить изображение комнаты")
+            
+            furniture_url = self.uploader.upload_image(furniture_image_path, expiration=600)
+            if not furniture_url:
+                furniture_url = self.uploader.image_to_data_url(furniture_image_path)
+            if not furniture_url:
+                raise ValueError("Не удалось загрузить изображение новой мебели")
+            
+            prompt = self._create_replace_prompt(replace_what)
+            room_img = Image.open(room_image_path)
+            aspect_ratio = self._get_aspect_ratio(room_img.size)
+            
+            payload = {
+                "model": self.model_name,
+                "input": {
+                    "prompt": prompt,
+                    "image_input": [room_url, furniture_url],
+                    "aspect_ratio": aspect_ratio,
+                    "resolution": "1K",
+                    "output_format": "png"
+                }
+            }
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json"
+            }
+            response = requests.post(self.api_url, headers=headers, json=payload, timeout=30)
+            response.raise_for_status()
+            result = response.json()
+            if result.get("code") != 200:
+                raise ValueError(f"Nano Banana Pro API: {result.get('message')}")
+            data = result.get("data", {})
+            task_id = data.get("taskId")
+            if not task_id:
+                raise ValueError("Нет taskId в ответе")
+            return self._query_task_result(task_id, output_dir)
+        except Exception as e:
+            print(f"❌ Ошибка замены мебели: {e}")
+            raise
+    
+    def _create_replace_prompt(self, replace_what: Optional[str] = None) -> str:
+        """Промпт для замены старой мебели в комнате на новую. replace_what — что именно заменить (например 'sofa on the left')."""
+        what_line = ""
+        if replace_what and replace_what.strip():
+            what_line = f" The furniture to replace is: {replace_what.strip()}.\n\n"
+        return f"""The first image is a room that contains existing furniture (e.g. an old sofa, chair, table, or bed). The second image shows the NEW furniture that should replace it.{what_line}
+TASK: REPLACE the existing furniture in the room with the new furniture from the second image.
+- Remove the old furniture completely.
+- Place the new furniture in the SAME location and position where the old one was.
+- Keep the rest of the room unchanged: walls, floor, other objects, lighting.
+- Preserve the EXACT appearance of the new furniture (same color, texture, design).
+- Match the room's lighting and add realistic shadows. The result must look photorealistic.
+- The new furniture must stand ON THE FLOOR in a natural orientation, not on the wall."""
+
     def place_furniture(
         self,
         room_image_path: str,
@@ -238,7 +310,7 @@ class NanoBananaService(BaseInpaintingService):
                     "prompt": prompt,
                     "image_input": [room_url, furniture_url],  # До 8 изображений
                     "aspect_ratio": aspect_ratio,
-                    "resolution": "2K",  # 2K для баланса качества и скорости
+                    "resolution": "1K",  # 1K быстрее; при необходимости можно вернуть 2K
                     "output_format": "png"
                 }
             }
@@ -298,14 +370,14 @@ class NanoBananaService(BaseInpaintingService):
             except Exception:
                 pass
     
-    def _query_task_result(self, task_id: str, output_dir: Path, max_attempts: int = 120) -> str:
+    def _query_task_result(self, task_id: str, output_dir: Path, max_attempts: int = 240) -> str:
         """
         Опрашивает результат задачи через Query task API
         
         Args:
             task_id: ID задачи от Kie.ai
             output_dir: Директория для сохранения
-            max_attempts: Максимальное количество попыток (по умолчанию 120 ≈ 4 мин при интервале 2 сек)
+            max_attempts: Максимальное количество попыток (по умолчанию 240 ≈ 8 мин при интервале 2 сек)
             
         Returns:
             Путь к результату
@@ -401,7 +473,8 @@ Place each item from the second image into the {room_style} room at these positi
 {placement_text}
 
 CRITICAL: Preserve the EXACT appearance of every furniture item - same colors, textures, and design. Integrate ALL items into the room in one coherent scene.
-Match the room's {room_lighting}. Add realistic shadows and reflections. Maintain photorealistic quality. Output in high resolution (2K) with sharp details."""
+CRITICAL: Place ALL furniture ON THE FLOOR, standing normally. Do NOT put furniture on walls or vertically against the wall. Beds must be horizontal on the floor, chairs and sofas upright on the floor with legs on the ground.
+Match the room's {room_lighting}. Add realistic shadows and reflections. Maintain photorealistic quality. Output in high resolution with sharp details."""
 
     def _create_prompt(self, placement_params: Dict[str, Any]) -> str:
         """
@@ -467,8 +540,9 @@ Requirements:
 - Maintain photorealistic quality
 - Keep furniture IDENTICAL to the original image
 - Blend seamlessly with the interior
+- CRITICAL: Place furniture ON THE FLOOR, standing normally. Do NOT put it on the wall or vertically. Beds horizontal on the floor, chairs/sofas upright with legs on the ground.
 
-Output in high resolution (2K) with sharp details."""
+Output in high resolution with sharp details."""
         
         return prompt.strip()
     

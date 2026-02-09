@@ -28,5 +28,65 @@
     "image_url": "/catalog/1a8b69a8-2792-45e7-834a-b2ddebf9c40f.png",
     "description": "кресло белое ",
     "price": 1000.0
+  },
+  {
+    "id": "d6d8e2b4-23fc-4a83-a0b7-f7194ffa982b",
+    "name": "Стол письменный с аксессуарами ",
+    "type": "Стол",
+    "style": "Современный ",
+    "image_path": "catalog/61bedd9b-4a3b-4d6f-808e-ab5247703bdc.png",
+    "image_url": "/catalog/61bedd9b-4a3b-4d6f-808e-ab5247703bdc.png",
+    "description": "Стол с компьютором и светильником и стулом",
+    "price": 15000.0
+  },
+  {
+    "id": "4c6370c0-23ab-4fd9-a246-8412fe9460ef",
+    "name": "Стол белый",
+    "type": "стол ",
+    "style": "Минимализм",
+    "image_path": "catalog/6979dc1e-7041-46d1-8b4d-996d1d083696.png",
+    "image_url": "/catalog/6979dc1e-7041-46d1-8b4d-996d1d083696.png",
+    "description": "Стол белый без ничего ",
+    "price": 5000.0
+  },
+  {
+    "id": "50dd6408-3cb6-4004-9bcd-b0e5fd57afd1",
+    "name": "Стул темный",
+    "type": "стул",
+    "style": "лофт",
+    "image_path": "catalog/bb022f0c-7c97-4b1e-bc69-c6b3dbfec9f4.png",
+    "image_url": "/catalog/bb022f0c-7c97-4b1e-bc69-c6b3dbfec9f4.png",
+    "description": "стул темный",
+    "price": 3000.0
+  },
+  {
+    "id": "d8dbfe25-c3a0-44d3-bed5-c018935b1d9a",
+    "name": "4 стула и стол",
+    "type": "стол , 4 стула",
+    "style": "Современный ",
+    "image_path": "catalog/44621525-b145-4e59-91ce-00bfe980ee59.png",
+    "image_url": "/catalog/44621525-b145-4e59-91ce-00bfe980ee59.png",
+    "description": "темный стол и 4 стула светлых (комплект)",
+    "price": 25000.0
+  },
+  {
+    "id": "67842520-0a91-49e0-a904-98a7785dd269",
+    "name": "Журнальный столик",
+    "type": "стол",
+    "style": "Современный ",
+    "image_path": "catalog/0bdce156-ea6d-4357-87de-1d97b174992b.png",
+    "image_url": "/catalog/0bdce156-ea6d-4357-87de-1d97b174992b.png",
+    "description": "маленький журнальный столик с декором",
+    "price": 10000.0
+  },
+  {
+    "id": "45cf8f47-732e-4761-9928-c87149a263c1",
+    "name": "светильнык",
+    "type": "светильник",
+    "style": "Современный ",
+    "image_path": "catalog/30cfba99-f8d2-46dc-b854-6738159ca2e0.png",
+    "image_url": "/catalog/30cfba99-f8d2-46dc-b854-6738159ca2e0.png",
+    "description": "светильник напольный",
+    "price": 3000.0
   }
 ]

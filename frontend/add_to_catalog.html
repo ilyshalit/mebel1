@@ -237,6 +237,9 @@
     </div>
     
     <script>
+        const API_BASE = window.location.port === '8080'
+            ? `${window.location.protocol}//${window.location.hostname}:8000`
+            : window.location.origin;
         const form = document.getElementById('uploadForm');
         const fileInput = document.getElementById('file');
         const fileLabel = document.getElementById('fileLabel');
@@ -282,7 +285,7 @@
             form.querySelector('button').disabled = true;
             
             try {
-                const response = await fetch('http://localhost:8000/api/catalog', {
+                const response = await fetch(API_BASE + '/api/catalog', {
                     method: 'POST',
                     body: formData
                 });
@@ -316,7 +319,7 @@
             btn.disabled = true;
             status.textContent = 'Обработка...';
             try {
-                const response = await fetch('http://localhost:8000/api/catalog/fix-backgrounds', { method: 'POST' });
+                const response = await fetch(API_BASE + '/api/catalog/fix-backgrounds', { method: 'POST' });
                 const data = await response.json();
                 if (data.success) {
                     status.textContent = '✓ ' + data.message;
@@ -332,5 +335,8 @@
             btn.disabled = false;
         });
     </script>
+    <footer style="text-align: center; padding: 1.5rem; margin-top: 2rem; border-top: 1px solid #eee; font-size: 0.875rem; color: #666;">
+        <p><a href="index.html">На главную</a> · <a href="legal/terms.html">Пользовательское соглашение</a> · <a href="legal/privacy.html">Политика конфиденциальности</a></p>
+    </footer>
 </body>
 </html>
