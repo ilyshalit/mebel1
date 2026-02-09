@@ -166,10 +166,11 @@ class GPT4Analyzer:
             if not room_url:
                 raise ValueError("Не удалось прочитать изображение комнаты")
             
-            prompt = """Look at this room interior photo. List the main furniture pieces that are clearly visible (e.g. sofa, table, bed, chair, desk, cabinet, armchair).
-For each item provide: "type" (one word in English: sofa, table, bed, chair, desk, cabinet, armchair, etc.) and "position" (left / center / right, or "center of room").
+            prompt = """Look at this room interior photo. List ONLY the furniture that you CLEARLY SEE in the image. Do NOT invent or assume anything that is not visible (e.g. if there is no bed, do not list a bed).
+For each item that is actually visible provide: "type" (one word in English: sofa, table, bed, chair, desk, cabinet, armchair, etc.) and "position" (left / center / right).
+CRITICAL: Include only items that are unambiguously present in the photo. If in doubt, omit the item.
 Return ONLY a valid JSON object, no markdown, no code block. Example:
-{"items": [{"type": "sofa", "position": "left"}, {"type": "table", "position": "center"}]}
+{"items": [{"type": "table", "position": "center"}, {"type": "chair", "position": "right"}]}
 If you see no clear furniture, return {"items": []}."""
             
             payload = {

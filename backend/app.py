@@ -170,6 +170,14 @@ async def admin_get_visits(
     return {"success": True, "visits": visits, "total": len(visits)}
 
 
+@app.get("/api/trial-status")
+async def trial_status(request: Request):
+    """Возвращает сколько визуализаций уже использовано и лимит (по IP)."""
+    client_ip = (request.headers.get("x-forwarded-for") or "").strip().split(",")[0].strip() or (request.client.host if request.client else "")
+    used = db.get_generate_count(client_ip)
+    return {"used": used, "limit": TRIAL_LIMIT, "remaining": max(0, TRIAL_LIMIT - used)}
+
+
 @app.post("/api/upload/room")
 async def upload_room(file: UploadFile = File(...)):
     """
@@ -306,18 +314,26 @@ async def generate_placement(
             raise HTTPException(400, "furniture_image_paths должен быть непустым массивом")
         furniture_paths = [resolve_furniture_path(p) for p in furniture_paths]
         
-        # Режим «Заменить мебель»: один предмет, без анализа позиции
+        # Режим «Заменить мебель»: 1–3 предмета, replace_what через запятую
         if (placement_mode or "").strip().lower() == "replace":
-            if len(furniture_paths) != 1:
-                raise HTTPException(400, "В режиме «Заменить мебель» выберите ровно один предмет (новую мебель)")
+            if len(furniture_paths) < 1 or len(furniture_paths) > 3:
+                raise HTTPException(400, "В режиме «Заменить мебель» выберите от 1 до 3 предметов (новую мебель)")
             replace_hint = (replace_what or "").strip() or None
             print(f"🔄 Режим замены: подставляем новую мебель вместо старой" + (f" ({replace_hint})" if replace_hint else "") + "...")
-            result_path = inpainting_service.place_furniture_replace(
-                resolve_room_path(room_image_path),
-                furniture_paths[0],
-                RESULTS_DIR,
-                replace_what=replace_hint
-            )
+            if len(furniture_paths) == 1:
+                result_path = inpainting_service.place_furniture_replace(
+                    resolve_room_path(room_image_path),
+                    furniture_paths[0],
+                    RESULTS_DIR,
+                    replace_what=replace_hint
+                )
+            else:
+                result_path = inpainting_service.place_furniture_replace_multi(
+                    resolve_room_path(room_image_path),
+                    furniture_paths,
+                    RESULTS_DIR,
+                    replace_what=replace_hint
+                )
             from backend.utils.image_utils import limit_image_size
             result_path = limit_image_size(result_path, max_long_side=1200)
             result_filename = Path(result_path).name
@@ -337,7 +353,7 @@ async def generate_placement(
                 "model_used": inpainting_service.get_model_name(),
                 "preserves_original": False,
                 "analysis": analysis,
-                "furniture_count": 1
+                "furniture_count": len(furniture_paths)
             }
         
         if len(furniture_paths) > 5:

@@ -20,7 +20,7 @@ let furnitureImagePaths = []; // Массив путей к мебели
 let selectedMode = 'auto';
 let placementMode = 'place'; // 'place' | 'replace' — разместить или заменить мебель
 let roomFurnitureItems = []; // Результат анализа комнаты для режима замены: [{type, position}]
-let replaceWhat = null;      // Выбранный предмет для замены (например "sofa on the left")
+let replaceWhatList = [];    // Массив выбранных предметов для замены (несколько)
 let manualPosition = null;
 let manualBox = null; // {x, y, w, h} in image pixels
 let catalogItems = [];
@@ -101,7 +101,7 @@ function initPlacementMode() {
         if (furnitureDropText) {
             furnitureDropText.textContent = mode === 'place'
                 ? 'Загрузите до 5 предметов мебели'
-                : 'Выберите один предмет (новую мебель)';
+                : 'Выберите 1–3 предмета (новую мебель)';
         }
         if (step2Title) {
             step2Title.textContent = mode === 'place' ? 'Режим Размещения' : 'Заменить мебель';
@@ -114,11 +114,12 @@ function initPlacementMode() {
             analyzeRoomForReplace();
         } else if (mode === 'place') {
             roomFurnitureItems = [];
-            replaceWhat = null;
+            replaceWhatList = [];
             renderReplaceWhatButtons();
         }
-        if (mode === 'replace' && furnitureImagePaths.length > 1) {
-            furnitureImagePaths = furnitureImagePaths.slice(0, 1);
+        if (mode === 'replace') updateTrialStatus();
+        if (mode === 'replace' && furnitureImagePaths.length > 3) {
+            furnitureImagePaths = furnitureImagePaths.slice(0, 3);
             renderFurniturePreviews();
         }
     }
@@ -368,8 +369,10 @@ function renderCatalog() {
             item.classList.add('selected');
             
             if (placementMode === 'replace') {
-                furnitureImagePaths = [item.dataset.path];
-                renderFurniturePreviews([{ file_path: item.dataset.path, filename: item.querySelector('img').alt }]);
+                if (!furnitureImagePaths.includes(item.dataset.path) && furnitureImagePaths.length < 3) {
+                    furnitureImagePaths.push(item.dataset.path);
+                    renderFurniturePreviews([{ file_path: item.dataset.path, filename: item.querySelector('img').alt }]);
+                }
             } else if (!furnitureImagePaths.includes(item.dataset.path)) {
                 furnitureImagePaths.push(item.dataset.path);
                 renderFurniturePreviews([{ file_path: item.dataset.path, filename: item.querySelector('img').alt }]);
@@ -421,7 +424,9 @@ function renderCatalogPreview() {
 
 function selectFurnitureFromCatalog(path) {
     if (placementMode === 'replace') {
-        furnitureImagePaths = [path];
+        if (furnitureImagePaths.includes(path)) return;
+        if (furnitureImagePaths.length >= 3) return;
+        furnitureImagePaths.push(path);
     } else if (!furnitureImagePaths.includes(path)) {
         furnitureImagePaths.push(path);
     }
@@ -659,16 +664,35 @@ function renderReplaceWhatButtons() {
         const posRu = pos === 'center' ? 'в центре' : pos === 'left' ? 'слева' : pos === 'right' ? 'справа' : pos;
         const label = furnitureLabel(it.type) + ' (' + posRu + ')';
         const value = pos === 'center' ? `${it.type} in the center` : `${it.type} on the ${pos}`;
-        const active = replaceWhat === value ? ' active' : '';
+        const active = replaceWhatList.includes(value) ? ' active' : '';
         return `<button type="button" class="replace-what-btn${active}" data-replace-value="${value.replace(/"/g, '&quot;')}">${label}</button>`;
     }).join('');
     container.querySelectorAll('.replace-what-btn').forEach(btn => {
         btn.addEventListener('click', () => {
-            replaceWhat = btn.dataset.replaceValue;
-            container.querySelectorAll('.replace-what-btn').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
+            const value = btn.dataset.replaceValue;
+            const idx = replaceWhatList.indexOf(value);
+            if (idx >= 0) {
+                replaceWhatList.splice(idx, 1);
+            } else {
+                if (replaceWhatList.length < 3) replaceWhatList.push(value);
+            }
+            btn.classList.toggle('active', replaceWhatList.includes(value));
         });
     });
+}
+
+async function updateTrialStatus() {
+    const el = document.getElementById('trialStatus');
+    if (!el) return;
+    try {
+        const r = await fetch(`${API_BASE_URL}/api/trial-status`);
+        const d = await r.json();
+        const rem = d.remaining != null ? d.remaining : Math.max(0, (d.limit || 3) - (d.used || 0));
+        const limit = d.limit || 3;
+        el.textContent = rem > 0 ? `Осталось ${rem} из ${limit} пробных визуализаций` : `Пробных визуализаций использовано: ${limit} из ${limit}`;
+    } catch (e) {
+        el.textContent = 'Пробных визуализаций: 3';
+    }
 }
 
 // Check if ready to generate
@@ -681,6 +705,7 @@ function checkReadyToGenerate() {
             if (replaceWhatBlock) replaceWhatBlock.style.display = 'block';
             if (roomFurnitureItems.length === 0 && roomImagePath) analyzeRoomForReplace();
         }
+        updateTrialStatus();
     } else {
         generateBtn.disabled = true;
     }
@@ -688,8 +713,8 @@ function checkReadyToGenerate() {
 
 // Generate (Nano Banana Pro)
 generateBtn.addEventListener('click', async () => {
-    if (placementMode === 'replace' && furnitureImagePaths.length !== 1) {
-        alert('В режиме «Заменить мебель» выберите ровно один предмет — новую мебель.');
+    if (placementMode === 'replace' && (furnitureImagePaths.length < 1 || furnitureImagePaths.length > 3)) {
+        alert('В режиме «Заменить мебель» выберите от 1 до 3 предметов — новую мебель.');
         return;
     }
     if (selectedMode === 'manual' && !manualBox) {
@@ -708,11 +733,11 @@ generateBtn.addEventListener('click', async () => {
         const formData = new FormData();
         formData.append('room_image_path', roomImagePath);
         const pathsToSend = placementMode === 'replace' && furnitureImagePaths.length
-            ? [furnitureImagePaths[0]]
+            ? furnitureImagePaths.slice(0, 3)
             : furnitureImagePaths;
         formData.append('furniture_image_paths', JSON.stringify(pathsToSend));
         formData.append('placement_mode', placementMode);
-        if (placementMode === 'replace' && replaceWhat) formData.append('replace_what', replaceWhat);
+        if (placementMode === 'replace' && replaceWhatList.length) formData.append('replace_what', replaceWhatList.join(', '));
         formData.append('mode', selectedMode);
         
         // rotation: 0 or 90
@@ -764,6 +789,7 @@ generateBtn.addEventListener('click', async () => {
                     console.log(`Размещено предметов: ${data.furniture_count || 1}`);
                 }
                 loadUpsellRecommendations(data.analysis, furnitureImagePaths);
+                updateTrialStatus();
             };
             resultImage.onload = onImageReady;
             resultImage.onerror = () => {

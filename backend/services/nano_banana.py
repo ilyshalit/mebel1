@@ -224,13 +224,34 @@ class NanoBananaService(BaseInpaintingService):
             print(f"❌ Ошибка замены мебели: {e}")
             raise
     
+    def place_furniture_replace_multi(
+        self,
+        room_image_path: str,
+        furniture_image_paths: List[str],
+        output_dir: Path,
+        replace_what: Optional[str] = None
+    ) -> str:
+        """Заменяет несколько предметов в комнате: коллаж новой мебели передаётся вторым изображением."""
+        if len(furniture_image_paths) < 2:
+            return self.place_furniture_replace(room_image_path, furniture_image_paths[0], output_dir, replace_what)
+        collage_path = str(output_dir / f"replace_collage_{uuid.uuid4().hex}.png")
+        try:
+            create_furniture_collage(furniture_image_paths, collage_path, max_height=512, padding=40)
+            return self.place_furniture_replace(room_image_path, collage_path, output_dir, replace_what)
+        finally:
+            try:
+                if os.path.exists(collage_path):
+                    os.remove(collage_path)
+            except Exception:
+                pass
+    
     def _create_replace_prompt(self, replace_what: Optional[str] = None) -> str:
         """Промпт для замены старой мебели в комнате на новую. replace_what — что именно заменить (например 'sofa on the left')."""
         what_line = ""
         if replace_what and replace_what.strip():
-            what_line = f" The furniture to replace is: {replace_what.strip()}.\n\n"
-        return f"""The first image is a room that contains existing furniture (e.g. an old sofa, chair, table, or bed). The second image shows the NEW furniture that should replace it.{what_line}
-TASK: REPLACE the existing furniture in the room with the new furniture from the second image.
+            what_line = f" The furniture to replace in the room is: {replace_what.strip()}.\n\n"
+        return f"""The first image is a room with existing furniture. The second image shows the NEW furniture (one or several items side by side) that should replace the corresponding old items.{what_line}
+TASK: REPLACE the existing furniture in the room with the new furniture from the second image. If the second image contains multiple items, place each in the correct position (e.g. first item replaces first mentioned, second replaces second).
 - Remove the old furniture completely.
 - Place the new furniture in the SAME location and position where the old one was.
 - Keep the rest of the room unchanged: walls, floor, other objects, lighting.

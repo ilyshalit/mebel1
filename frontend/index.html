@@ -78,21 +78,14 @@
                             </div>
                         </div>
 
-                        <!-- Tab: Каталог -->
+                        <!-- Tab: Каталог (горизонтальная прокрутка) -->
                         <div class="tab-content" id="catalogTab">
-                            <div id="catalogGrid" class="catalog-grid">
+                            <div id="catalogGrid" class="catalog-grid catalog-grid-horizontal">
                                 <p class="empty-catalog">Каталог загружается...</p>
                             </div>
                         </div>
                     </div>
                 </div>
-            </section>
-
-            <!-- Популярные товары из каталога -->
-            <section class="catalog-preview" id="catalogPreview" style="display: none;">
-                <h2>Популярные Товары</h2>
-                <p class="catalog-subtitle">Выберите мебель из нашего каталога</p>
-                <div id="catalogPreviewGrid" class="catalog-products"></div>
             </section>
 
             <!-- Шаг 2: Выбор режима размещения (или сразу генерация для «Заменить») -->
@@ -108,6 +101,7 @@
                     <p class="replace-what-hint" id="replaceWhatHint">ИИ проанализировал комнату — выберите предмет для замены.</p>
                 </div>
                 
+                <p class="trial-status" id="trialStatus">Пробных визуализаций: 3 из 3</p>
                 <div class="mode-selection" id="placeModeSelection">
                     <button class="mode-btn active" id="autoMode">
                         <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -177,6 +171,13 @@
                     </svg>
                     Создать Визуализацию
                 </button>
+            </section>
+
+            <!-- Популярные товары из каталога (ниже шага «Что заменить» и кнопки) -->
+            <section class="catalog-preview" id="catalogPreview" style="display: none;">
+                <h2>Популярные Товары</h2>
+                <p class="catalog-subtitle">Выберите мебель из нашего каталога</p>
+                <div id="catalogPreviewGrid" class="catalog-products catalog-products-horizontal"></div>
             </section>
 
             <!-- Шаг 3: Результат -->
