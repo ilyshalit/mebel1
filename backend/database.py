@@ -52,6 +52,21 @@ def log_visit(ip_address: str, user_agent: str, path: str, method: str) -> None:
         conn.close()
 
 
+def get_generate_count(ip_address: str) -> int:
+    """Сколько раз этот IP уже вызывал POST /api/generate (для лимита пробных запросов)."""
+    if not ip_address or not DB_PATH.exists():
+        return 0
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        cur = conn.execute(
+            "SELECT COUNT(*) FROM visits WHERE ip_address = ? AND path = '/api/generate' AND method = 'POST'",
+            (ip_address.strip(),)
+        )
+        return cur.fetchone()[0] or 0
+    finally:
+        conn.close()
+
+
 def get_visits(limit: int = 500) -> List[Dict[str, Any]]:
     """Возвращает последние визиты (новые сверху)."""
     if not DB_PATH.exists():

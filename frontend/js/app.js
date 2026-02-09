@@ -742,6 +742,14 @@ generateBtn.addEventListener('click', async () => {
         
         const data = await response.json();
         
+        if (!response.ok) {
+            setLoadingNoticeVisible(false);
+            loadingState.style.display = 'none';
+            const msg = data.detail || data.error || data.message || 'Ошибка генерации';
+            alert(typeof msg === 'string' ? msg : (msg.msg || JSON.stringify(msg)));
+            return;
+        }
+        
         if (data.success) {
             updateLoadingText('Скачиваем изображение...');
             const resultUrl = `${API_BASE_URL}${data.result_image_url}`;

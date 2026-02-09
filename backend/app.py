@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, Form, Header, Query
+from fastapi import FastAPI, File, UploadFile, HTTPException, Form, Header, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -260,8 +260,12 @@ async def analyze_room_for_replace(room_image_path: str = Form(...)):
         raise HTTPException(500, f"Ошибка анализа комнаты: {str(e)}")
 
 
+TRIAL_LIMIT = int(get_env_optional("TRIAL_LIMIT") or "3")
+
+
 @app.post("/api/generate")
 async def generate_placement(
+    request: Request,
     room_image_path: str = Form(...),
     furniture_image_paths: str = Form(...),  # JSON array строка
     mode: str = Form(default="auto"),
@@ -288,6 +292,13 @@ async def generate_placement(
     """
     try:
         import json
+        client_ip = (request.headers.get("x-forwarded-for") or "").strip().split(",")[0].strip() or (request.client.host if request.client else "")
+        used = db.get_generate_count(client_ip)
+        if used >= TRIAL_LIMIT:
+            raise HTTPException(
+                403,
+                f"Пробный период: использовано {used} из {TRIAL_LIMIT} бесплатных визуализаций. Для продолжения свяжитесь с нами."
+            )
         start_time = time.time()
         
         furniture_paths = json.loads(furniture_image_paths)
